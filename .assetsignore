@@ -1,0 +1,14 @@
+.git/
+.codex/
+.agents/
+.aws/
+supabase/
+README.md
+wrangler.jsonc
+.assetsignore
+.gitignore
+node_modules/
+.wrangler/
+worker-deploy.txt
+.claude/
+.DS_Store

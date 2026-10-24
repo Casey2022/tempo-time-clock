@@ -1,0 +1,19 @@
+# Local Supabase CLI configuration placeholder.
+# Set the project_id after creating the remote project.
+project_id = "akhkjwtuirawrqfskqtd"
+
+[auth]
+site_url = "https://timeclock.caseycaudle.workers.dev"
+additional_redirect_urls = [
+  "https://timeclock.caseycaudle.workers.dev/**",
+  "http://localhost:8080/**"
+]
+
+# Enable after the production hostname is chosen. Passkeys are domain-bound.
+[auth.passkey]
+enabled = false
+
+[auth.webauthn]
+rp_display_name = "Tempo"
+rp_id = "localhost"
+rp_origins = ["http://localhost:8080"]

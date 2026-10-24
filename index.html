@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <meta name="description" content="A calm, personal time clock for tracking hours, jobs, and pay." />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%234f46e5'/%3E%3Cpath d='M32 17v16l10 7' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='33' r='17' fill='none' stroke='white' stroke-width='4'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Tempo — Personal time clock</title>
+  </head>
+  <body>
+    <section class="auth-gate hidden" id="auth-gate" aria-hidden="true">
+      <div class="auth-card">
+        <div class="brand-lockup auth-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="2.5"/><path d="M16 10.5v6.2l4.2 2.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 4.5h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+          </div>
+          <div><div class="brand-name">tempo</div><div class="brand-subtitle">personal time clock</div></div>
+        </div>
+        <p class="eyebrow">Shared workspace</p>
+        <h1 id="auth-title">Sign in to Tempo</h1>
+        <p class="muted" id="auth-description">Your hours are protected and available offline after you sign in.</p>
+        <form id="auth-form" class="auth-form">
+          <label class="field" id="auth-email-field"><span>Email</span><input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+          <label class="field"><span id="auth-password-label">Password</span><input id="auth-password" type="password" autocomplete="current-password" minlength="8" required placeholder="At least 8 characters" /></label>
+          <label class="field hidden" id="auth-confirm-password-field"><span>Confirm new password</span><input id="auth-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="Enter it again" /></label>
+          <button class="button primary-button auth-submit" type="submit" id="auth-submit">Sign in</button>
+        </form>
+        <button class="text-button auth-reset" type="button" id="auth-reset">Forgot password?</button>
+        <div class="auth-actions">
+          <button class="button secondary-button" type="button" id="auth-signup">Create account</button>
+          <button class="button secondary-button" type="button" id="auth-google">Continue with Google</button>
+        </div>
+        <button class="text-button auth-passkey" type="button" id="auth-passkey">Use a passkey</button>
+        <button class="text-button hidden" type="button" id="auth-demo">Continue with local demo</button>
+        <p class="auth-message" id="auth-message" role="status"></p>
+      </div>
+    </section>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="2.5"/><path d="M16 10.5v6.2l4.2 2.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 4.5h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+          </div>
+          <div>
+            <div class="brand-name">tempo</div>
+            <div class="brand-subtitle">personal time clock</div>
+          </div>
+        </div>
+
+        <div class="sidebar-section-label">Workspace</div>
+        <nav class="nav-list" aria-label="Main navigation">
+          <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Overview</span></button>
+          <button class="nav-item" data-view="week"><span class="nav-icon">▤</span><span>Week view</span></button>
+          <button class="nav-item" data-view="calendar"><span class="nav-icon">□</span><span>Calendar</span></button>
+          <button class="nav-item" data-view="jobs"><span class="nav-icon">◈</span><span>Jobs &amp; rates</span></button>
+          <button class="nav-item" data-view="activity"><span class="nav-icon">↗</span><span>Activity</span></button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="offline-card" id="sync-card">
+          <div class="status-dot"></div>
+          <div>
+            <div class="offline-title" id="sync-title">Offline ready</div>
+            <div class="offline-copy" id="sync-copy">Saved on this device</div>
+          </div>
+          <span class="sync-icon" title="Offline-ready">⌁</span>
+        </div>
+        <div class="profile-card">
+          <div class="avatar avatar-indigo">CC</div>
+          <div class="profile-copy"><strong>Casey Caudle</strong><span>Owner / admin</span></div>
+          <button class="icon-button small" id="profile-menu-button" aria-label="Open profile menu">•••</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button class="mobile-menu icon-button" id="mobile-menu" aria-label="Open menu">☰</button>
+          <div class="breadcrumbs"><span>Workspace</span><span class="crumb-separator">/</span><strong id="page-title">Overview</strong></div>
+          <div class="topbar-actions">
+            <div class="connection-pill"><span class="tiny-dot"></span><span id="connection-pill-label">Offline ready</span></div>
+            <button class="icon-button" aria-label="Notifications">♢</button>
+            <button class="avatar avatar-indigo avatar-button" id="account-button" aria-label="Account">CC</button>
+          </div>
+        </header>
+
+        <div class="page-content">
+          <section class="view-panel active" id="view-overview">
+            <div class="welcome-row">
+              <div>
+                <p class="eyebrow" id="today-eyebrow">Tuesday, October 20, 2026</p>
+                <h1>Good morning, Casey <span class="wave">✦</span></h1>
+                <p class="muted intro-copy">Keep your hours moving in the right direction.</p>
+              </div>
+              <button class="button primary-button" id="add-entry-button"><span class="button-plus">+</span> Add time</button>
+            </div>
+
+            <div class="metric-grid">
+              <article class="metric-card featured-card">
+                <div class="card-topline"><span>This week</span><span class="soft-badge">Oct 19 – 25</span></div>
+                <div class="metric-value" id="week-hours">00h 00m</div>
+                <div class="metric-label">Total hours</div>
+                <div class="progress-track"><div class="progress-fill" id="week-progress"></div></div>
+                <div class="metric-foot"><span id="week-target-label">0% of 40h target</span><span class="trend-up">↗ on track</span></div>
+              </article>
+              <article class="metric-card">
+                <div class="card-topline"><span>Estimated pay</span><span class="metric-icon green-icon">$</span></div>
+                <div class="metric-value" id="week-pay">$0.00</div>
+                <div class="metric-label">Gross pay this week</div>
+                <div class="metric-foot metric-foot-bottom"><span class="muted">Based on rounded hours</span><span class="tiny-arrow">→</span></div>
+              </article>
+              <article class="metric-card">
+                <div class="card-topline"><span>Active now</span><span class="metric-icon purple-icon">◷</span></div>
+                <div class="metric-value" id="active-count">0</div>
+                <div class="metric-label">Open clocks</div>
+                <div class="metric-foot metric-foot-bottom"><span class="muted" id="active-description">Nothing running</span><span class="live-pulse"></span></div>
+              </article>
+            </div>
+
+            <div class="dashboard-grid">
+              <section class="panel quick-clock-panel">
+                <div class="panel-header"><div><p class="eyebrow">Live tracking</p><h2>General work</h2></div><span class="quick-clock-state" id="quick-clock-state">Ready</span></div>
+                <div id="quick-clock" aria-live="polite"></div>
+                <div id="active-clocks" class="active-clock-list hidden"></div>
+              </section>
+              <section class="panel week-panel">
+                <div class="panel-header"><div><p class="eyebrow">Your workweek</p><h2>Recent entries</h2></div><button class="text-button" data-view-link="week">View week <span>→</span></button></div>
+                <div id="recent-entries" class="recent-entry-list"></div>
+              </section>
+            </div>
+
+            <section class="panel upcoming-panel">
+              <div class="panel-header"><div><p class="eyebrow">Coming up</p><h2>Planned shifts</h2></div><button class="text-button" id="add-shift-button">+ Add shift</button></div>
+              <div id="upcoming-shifts" class="shift-list"></div>
+            </section>
+          </section>
+
+          <section class="view-panel" id="view-week">
+            <div class="section-heading-row"><div><p class="eyebrow" id="week-view-eyebrow">This week</p><h1>Week view</h1><p class="muted">Your completed hours, rounded to 15-minute increments.</p></div><button class="button primary-button" id="week-add-button">+ Add time</button></div>
+            <div class="calendar-toolbar week-toolbar"><button class="icon-button" id="week-prev" aria-label="Previous week">‹</button><strong id="week-view-label">This week</strong><button class="icon-button" id="week-next" aria-label="Next week">›</button><span class="toolbar-spacer"></span><label class="week-picker"><span>Jump to</span><input type="date" id="week-view-picker" aria-label="Pick any day to view its week" /></label><button class="button secondary-button" id="week-this-button">This week</button></div>
+            <div class="week-summary-strip"><div><span class="strip-label">Hours</span><strong id="week-view-hours">00h 00m</strong></div><div><span class="strip-label">Gross pay</span><strong id="week-view-pay">$0.00</strong></div><div><span class="strip-label">Entries</span><strong id="week-view-count">0</strong></div><div class="strip-progress"><span class="strip-label">40h target</span><div class="progress-track"><div class="progress-fill" id="week-view-progress"></div></div></div></div>
+            <div class="panel week-table-panel"><div id="week-table"></div></div>
+          </section>
+
+          <section class="view-panel" id="view-calendar">
+            <div class="section-heading-row"><div><p class="eyebrow">October 2026</p><h1>Calendar</h1><p class="muted">Completed hours first, planned shifts alongside them.</p></div><button class="button secondary-button" id="calendar-today-button">Today</button></div>
+            <div class="calendar-toolbar"><button class="icon-button" id="calendar-prev" aria-label="Previous month">‹</button><strong id="calendar-month-label">October 2026</strong><button class="icon-button" id="calendar-next" aria-label="Next month">›</button><span class="toolbar-spacer"></span><span class="legend-item"><i class="legend-dot worked"></i>Worked</span><span class="legend-item"><i class="legend-dot planned"></i>Planned</span></div>
+            <div class="panel calendar-panel"><div class="calendar-grid" id="calendar-grid"></div></div>
+          </section>
+
+          <section class="view-panel" id="view-jobs">
+            <div class="section-heading-row"><div><p class="eyebrow">Workspace setup</p><h1>Jobs &amp; rates</h1><p class="muted">Set the defaults that make every entry faster.</p></div><button class="button primary-button" id="add-job-button">+ Add job</button></div>
+            <div class="jobs-layout"><div class="panel people-panel"><div class="panel-header"><div><p class="eyebrow">Workspace</p><h2>People</h2></div><div class="panel-header-actions"><span class="soft-badge" id="member-count">0 members</span><button class="text-button hidden" id="invite-member-button">+ Invite</button></div></div><div id="people-list"></div></div><div class="panel jobs-panel"><div class="panel-header"><div><p class="eyebrow">Labels &amp; defaults</p><h2>Jobs</h2></div><span class="muted small-text">USD / hour</span></div><div id="jobs-list"></div></div></div>
+          </section>
+
+          <section class="view-panel" id="view-activity">
+            <div class="section-heading-row"><div><p class="eyebrow">A clear paper trail</p><h1>Activity</h1><p class="muted">Every edit and deletion is captured for review.</p></div><button class="button secondary-button" id="export-button">Export CSV</button></div>
+            <div class="panel activity-panel"><div class="activity-header"><span>Change</span><span>Person</span><span>When</span></div><div id="activity-list"></div></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="entry-modal" aria-hidden="true">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">New time entry</p><h2 id="entry-modal-title">Add time</h2></div><button class="icon-button close-modal" data-close="entry-modal" aria-label="Close">×</button></div>
+        <div class="entry-tabs"><button class="entry-tab active" data-entry-mode="timer">Timer</button><button class="entry-tab" data-entry-mode="range">Start &amp; end</button><button class="entry-tab" data-entry-mode="duration">Duration only</button></div>
+        <form id="entry-form">
+          <input type="hidden" id="entry-id" value="" />
+          <input type="hidden" id="entry-mode" value="timer" />
+          <div class="form-grid two-col"><label class="field"><span>Job</span><select id="entry-job" required></select></label><label class="field"><span>Person</span><select id="entry-person" required></select></label></div>
+          <div class="entry-mode-fields" data-mode-fields="timer"><div class="timer-form-note"><span class="timer-dot"></span><span>Starting a clock will begin tracking immediately.</span></div></div>
+          <div class="entry-mode-fields hidden" data-mode-fields="range"><div class="form-grid two-col"><label class="field"><span>Start</span><input type="datetime-local" id="entry-start" /></label><label class="field"><span>End</span><input type="datetime-local" id="entry-end" /></label></div></div>
+          <div class="entry-mode-fields hidden" data-mode-fields="duration"><div class="form-grid two-col"><label class="field"><span>Date</span><input type="date" id="entry-date" /></label><label class="field"><span>Duration</span><input type="number" id="entry-duration" min="0" step="0.01" placeholder="e.g. 4.5" /><small>Hours before rounding</small></label></div></div>
+          <div class="entry-form-note">Breaks are optional and tracked separately. Start or add a break only when one actually happens.</div>
+          <div class="form-grid two-col"><label class="field"><span>Rate override <em>optional</em></span><div class="input-prefix"><span>$</span><input type="number" id="entry-rate" min="0" step="0.01" placeholder="Use default" /></div></label><label class="field"><span>Notes <em>optional</em></span><input type="text" id="entry-note" placeholder="What was this for?" /></label></div>
+          <div class="modal-footer"><button type="button" class="button danger-button hidden" id="entry-delete-button">Delete entry</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="entry-modal">Cancel</button><button type="submit" class="button primary-button" id="entry-submit">Start clock</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="shift-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="shift-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Plan ahead</p><h2 id="shift-modal-title">Add planned shift</h2></div><button class="icon-button close-modal" data-close="shift-modal" aria-label="Close">×</button></div>
+        <form id="shift-form"><input type="hidden" id="shift-id" value="" /><div class="form-grid two-col"><label class="field"><span>Job</span><select id="shift-job" required></select></label><label class="field"><span>Person</span><select id="shift-person" required></select></label></div><div class="form-grid two-col"><label class="field"><span>Start</span><input type="datetime-local" id="shift-start" required /></label><label class="field"><span>End</span><input type="datetime-local" id="shift-end" required /></label></div><label class="field"><span>Notes <em>optional</em></span><input type="text" id="shift-note" placeholder="What is planned?" /></label><div class="modal-footer"><button type="button" class="button danger-button hidden" id="shift-delete-button">Delete shift</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="shift-modal">Cancel</button><button type="submit" class="button primary-button" id="shift-submit">Add shift</button></div></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="person-rate-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="person-rate-title">
+        <div class="modal-header"><div><p class="eyebrow">People &amp; rates</p><h2 id="person-rate-title">Edit default rate</h2></div><button class="icon-button close-modal" data-close="person-rate-modal" aria-label="Close">×</button></div>
+        <form id="person-rate-form"><input type="hidden" id="person-rate-id" value="" /><p class="muted rate-modal-copy">Default rate for <strong id="person-rate-name"></strong>. Job-specific rates and entry overrides still take precedence.</p><label class="field"><span>Hourly rate <em>USD</em></span><div class="input-prefix"><span>$</span><input type="number" id="person-rate-value" min="0" step="0.01" required /></div></label><div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="person-rate-modal">Cancel</button><button type="submit" class="button primary-button">Save rate</button></div></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="job-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="job-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Workspace setup</p><h2 id="job-modal-title">Add job</h2></div><button class="icon-button close-modal" data-close="job-modal" aria-label="Close">×</button></div>
+        <form id="job-form">
+          <input type="hidden" id="job-modal-id" value="" />
+          <label class="field"><span>Job name</span><input type="text" id="job-modal-name" required placeholder="e.g. Client work, Design, Admin" /></label>
+          <div class="form-grid two-col">
+            <label class="field"><span>Color</span><select id="job-modal-color"><option value="indigo">Indigo</option><option value="orange">Orange</option><option value="green">Green</option><option value="purple">Purple</option></select></label>
+            <label class="paid-toggle modal-paid-toggle job-general-toggle"><input type="checkbox" id="job-modal-general" checked /><span>General job (anyone can track it)</span></label>
+          </div>
+          <div class="job-rates-heading"><strong>Hourly rates for this job</strong><span>Leave blank to use the person's default rate.</span></div>
+          <div class="form-grid two-col" id="job-modal-rates"></div>
+          <div class="modal-footer"><button type="button" class="button danger-button hidden" id="job-modal-delete">Delete job</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="job-modal">Cancel</button><button type="submit" class="button primary-button" id="job-modal-submit">Save job</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="invite-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Shared workspace</p><h2 id="invite-modal-title">Invite someone</h2></div><button class="icon-button close-modal" data-close="invite-modal" aria-label="Close">×</button></div>
+        <form id="invite-form">
+          <p class="muted rate-modal-copy">They'll get an email with a sign-in link. Once they sign in with this email, they join your workspace and share your jobs, entries and calendar.</p>
+          <div class="form-grid two-col"><label class="field"><span>Email</span><input type="email" id="invite-email" required autocomplete="off" placeholder="name@example.com" /></label><label class="field"><span>Default rate <em>USD / hour</em></span><div class="input-prefix"><span>$</span><input type="number" id="invite-rate" min="0" step="0.01" /></div></label></div>
+          <p class="auth-message error" id="invite-message" role="status"></p>
+          <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="invite-modal">Cancel</button><button type="submit" class="button primary-button" id="invite-submit">Send invite</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="break-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="break-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Separate break record</p><h2 id="break-modal-title">Add break</h2></div><button class="icon-button close-modal" data-close="break-modal" aria-label="Close">×</button></div>
+        <form id="break-form"><input type="hidden" id="break-entry-id" value="" /><div class="form-grid two-col"><label class="field"><span>Date</span><input type="date" id="break-date" required /></label><div class="field"><span>Paid break</span><label class="paid-toggle modal-paid-toggle"><input type="checkbox" id="break-paid" /> Count this break as paid</label></div></div><div class="form-grid two-col"><label class="field"><span>Start</span><input type="time" id="break-start" required /></label><label class="field"><span>End</span><input type="time" id="break-end" required /></label></div><p class="muted rate-modal-copy">Unpaid breaks are deducted from the linked work entry. Paid breaks remain in paid time.</p><div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="break-modal">Cancel</button><button type="submit" class="button primary-button">Add break</button></div></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="account-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Your workspace account</p><h2 id="account-modal-title">Account</h2></div><button class="icon-button close-modal" data-close="account-modal" aria-label="Close">×</button></div>
+        <div class="account-summary"><div class="avatar avatar-indigo" id="account-modal-avatar">CC</div><div><strong id="account-modal-name">Casey Caudle</strong><span id="account-modal-role">Owner / admin</span></div></div>
+        <div class="account-details"><div><span>Default rate</span><strong id="account-modal-rate">$0.00 / hour</strong></div><div><span>Time zone</span><strong>America/New_York</strong></div></div>
+        <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="account-modal">Close</button><button type="button" class="button secondary-button" id="account-jobs-button">Jobs &amp; rates</button><button type="button" class="button primary-button" id="account-signout">Sign out</button></div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="storage.js"></script>
+    <script src="app-config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.105.0"></script>
+    <script src="supabase-client.js"></script>
+    <script src="auth.js"></script>
+    <script src="cloud-sync.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
