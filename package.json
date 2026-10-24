@@ -1,0 +1,12 @@
+{
+  "name": "tempo-time-clock",
+  "private": true,
+  "description": "Tempo personal time clock: offline-ready PWA on Cloudflare Workers + Supabase",
+  "scripts": {
+    "dev": "python3 -m http.server 8080",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.3"
+  }
+}

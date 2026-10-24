@@ -6,10 +6,12 @@ Live: https://timeclock.caseycaudle.workers.dev
 
 ## Deploy
 
-The `timeclock` worker serves this folder as static assets (see `wrangler.jsonc`; `.assetsignore` keeps config and SQL out of the upload).
+The `timeclock` worker serves this folder as static assets (see `wrangler.jsonc`; `.assetsignore` keeps config, SQL and `node_modules` out of the upload).
+
+Every push to `main` on GitHub deploys automatically through Cloudflare Workers Builds (deploy command `npx wrangler deploy`, using the Wrangler version pinned in `package.json`). To deploy by hand instead:
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
 
 The service worker is network-first, so a deploy shows up on the next load. Bump `CACHE_NAME` in `sw.js` when the list of cached files changes.
