@@ -144,6 +144,7 @@
     };
   }
 
+  const ROLE_LABELS = { owner: 'Owner / admin', member: 'Member', payer: 'Payer' };
   const ENTITY_LABELS = { time_entries: 'Time entry', planned_shifts: 'Planned shift', jobs: 'Job' };
 
   function auditDetail(item, jobNames) {
@@ -156,7 +157,8 @@
 
   async function ensureWorkspace(supabaseClient, user) {
     const displayName = displayNameFor(user);
-    check(await supabaseClient.from('profiles').upsert({ id: user.id, display_name: displayName, initials: initialsFor(displayName), updated_at: new Date().toISOString() }));
+    // ignoreDuplicates: create the profile on first sign-in, never overwrite a name the person changed.
+    check(await supabaseClient.from('profiles').upsert({ id: user.id, display_name: displayName, initials: initialsFor(displayName) }, { onConflict: 'id', ignoreDuplicates: true }));
     return check(await supabaseClient.rpc('bootstrap_workspace'));
   }
 
@@ -181,9 +183,9 @@
     const entryIds = entryRows.map((entry) => entry.id);
     const isOwner = memberRows.some((member) => member.user_id === currentUser.id && member.role === 'owner');
     const [profileRows, breakRows, inviteRows, paymentRows] = await Promise.all([
-      memberIds.length ? supabaseClient.from('profiles').select('id, display_name, initials').in('id', memberIds).then(check) : [],
+      memberIds.length ? supabaseClient.from('profiles').select('*').in('id', memberIds).then(check) : [],
       entryIds.length ? supabaseClient.from('breaks').select('*').in('time_entry_id', entryIds).then(check) : [],
-      isOwner ? supabaseClient.from('workspace_invites').select('id, email, default_rate_cents, created_at').eq('workspace_id', workspaceId).is('accepted_at', null).order('created_at').then(check) : [],
+      isOwner ? supabaseClient.from('workspace_invites').select('id, email, role, default_rate_cents, created_at').eq('workspace_id', workspaceId).is('accepted_at', null).order('created_at').then(check) : [],
       supabaseClient.from('week_payments').select('person_id, week_start, amount_paid_cents').eq('workspace_id', workspaceId).then((result) => {
         paymentsAvailable = !isMissingTable(result.error);
         return paymentsAvailable ? check(result) : [];
@@ -191,14 +193,14 @@
     ]);
 
     const profiles = new Map((profileRows || []).map((item) => [item.id, item]));
-    const jobs = jobRows.map((job) => ({ id: job.id, name: job.name, color: job.color, general: job.is_general, rates: {} }));
+    const jobs = jobRows.map((job) => ({ id: job.id, name: job.name, color: job.color, general: job.is_general, createdBy: job.created_by, rates: {} }));
     const jobMap = new Map(jobs.map((job) => [job.id, job]));
     rateRows.forEach((rate) => { const job = jobMap.get(rate.job_id); if (job) job.rates[rate.person_id] = Number(rate.rate_cents) / 100; });
     const people = memberRows
       .sort((a, b) => (a.role === 'owner' ? -1 : 0) - (b.role === 'owner' ? -1 : 0))
       .map((member) => {
         const profile = profiles.get(member.user_id) || { display_name: member.user_id === currentUser.id ? displayNameFor(currentUser) : 'Workspace member', initials: 'WM' };
-        return { id: member.user_id, name: profile.display_name, initials: profile.initials, role: member.role === 'owner' ? 'Owner / admin' : 'Member', defaultRate: Number(member.default_rate_cents || 0) / 100, avatar: member.user_id === currentUser.id ? 'indigo' : 'orange' };
+        return { id: member.user_id, name: profile.display_name, initials: profile.initials, role: ROLE_LABELS[member.role] || 'Member', roleKey: member.role, venmo: profile.venmo_username || '', defaultRate: Number(member.default_rate_cents || 0) / 100, avatar: member.user_id === currentUser.id ? 'indigo' : 'orange' };
       });
     const entries = entryRows.map((entry) => mapEntry(entry, breakRows || []));
     const shifts = shiftRows.map((shift) => ({ id: shift.id, personId: shift.person_id || 'general', jobId: shift.job_id, start: shift.start_at, end: shift.end_at, note: shift.note || '', deletedAt: shift.deleted_at }));
@@ -206,7 +208,7 @@
     const audit = auditRows.map((item) => ({ id: item.id, action: item.action[0].toUpperCase() + item.action.slice(1), detail: auditDetail(item, jobNames), actorId: item.actor_id || currentUser.id, at: item.created_at }));
     const previous = window.TempoApp.getState();
     const payments = !paymentsAvailable ? (previous.payments || []) : (paymentRows || []).map((row) => ({ personId: row.person_id, weekStart: row.week_start, amountPaid: Number(row.amount_paid_cents || 0) / 100 }));
-    const invites = (inviteRows || []).map((invite) => ({ id: invite.id, email: invite.email, defaultRate: Number(invite.default_rate_cents || 0) / 100, createdAt: invite.created_at }));
+    const invites = (inviteRows || []).map((invite) => ({ id: invite.id, email: invite.email, role: ROLE_LABELS[invite.role] || 'Member', defaultRate: Number(invite.default_rate_cents || 0) / 100, createdAt: invite.created_at }));
 
     const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, payments, sync: previous.sync || {} };
     nextState.sync.snapshot = snapshotOf(rowsFromState(nextState));
@@ -225,6 +227,7 @@
     const snapshot = state.sync.snapshot;
     const rows = rowsFromState(state);
     const isOwner = state.people.some((person) => person.id === currentUser.id && /owner/i.test(person.role || ''));
+    const isEditor = !state.people.some((person) => person.id === currentUser.id && person.roleKey === 'payer');
 
     const jobs = changed(rows, snapshot, 'jobs');
     if (jobs.length) check(await supabaseClient.from('jobs').upsert(jobs.map(([, row]) => row)));
@@ -247,9 +250,10 @@
       }
     }
 
-    const entries = changed(rows, snapshot, 'entries');
+    // A payer changing a job rate recalculates entry totals locally; those aren't theirs to save.
+    const entries = isEditor ? changed(rows, snapshot, 'entries') : [];
     if (entries.length) check(await supabaseClient.from('time_entries').upsert(entries.map(([, row]) => row)));
-    const breaks = changed(rows, snapshot, 'breaks');
+    const breaks = isEditor ? changed(rows, snapshot, 'breaks') : [];
     if (breaks.length) check(await supabaseClient.from('breaks').upsert(breaks.map(([, row]) => row)));
     const shifts = changed(rows, snapshot, 'shifts');
     if (shifts.length) check(await supabaseClient.from('planned_shifts').upsert(shifts.map(([, row]) => row)));
@@ -264,6 +268,7 @@
     latest.sync.snapshot = snapshotOf(rows);
     if (!isOwner) latest.sync.snapshot.members = snapshot.members;
     if (!paymentsAvailable) latest.sync.snapshot.payments = snapshot.payments;
+    if (!isEditor) { latest.sync.snapshot.entries = snapshot.entries; latest.sync.snapshot.breaks = snapshot.breaks; }
     latest.sync.lastSyncedAt = new Date().toISOString();
     latest.sync.pendingMutations = [];
     window.TempoStore.save(latest);
@@ -340,17 +345,29 @@
     refreshTimer = setTimeout(refresh, 800);
   }
 
-  async function inviteMember(email, defaultRate) {
+  async function inviteMember(email, defaultRate, role = 'member') {
     const supabaseClient = client();
     if (!supabaseClient || !workspaceId) throw new Error('Connect to the cloud workspace before inviting someone.');
     const normalized = String(email || '').trim().toLowerCase();
-    const result = await supabaseClient.from('workspace_invites').insert({ workspace_id: workspaceId, email: normalized, default_rate_cents: cents(defaultRate) });
+    const result = await supabaseClient.from('workspace_invites').insert({ workspace_id: workspaceId, email: normalized, role, default_rate_cents: cents(defaultRate) });
     if (result.error?.code === '23505') throw new Error(`${normalized} already has a pending invite.`);
     check(result);
     // Emails them a one-time sign-in link. It creates their account if they don't have one yet.
     const { error: emailError } = await supabaseClient.auth.signInWithOtp({ email: normalized, options: { shouldCreateUser: true, emailRedirectTo: window.location.origin } });
     await refresh();
     return { emailSent: !emailError, emailError: emailError?.message };
+  }
+
+  async function updateProfile({ name, venmo }) {
+    const supabaseClient = client();
+    if (!supabaseClient || !currentUser) throw new Error('Connect to the cloud workspace first.');
+    const fields = { updated_at: new Date().toISOString() };
+    if (name !== undefined) { fields.display_name = name; fields.initials = initialsFor(name); }
+    if (venmo !== undefined) fields.venmo_username = venmo || null;
+    const result = await supabaseClient.from('profiles').update(fields).eq('id', currentUser.id);
+    if (result.error?.code === 'PGRST204' || /venmo_username/.test(result.error?.message || '')) throw new Error('Run 0003_payer_role_and_venmo.sql in Supabase first.');
+    check(result);
+    await refresh();
   }
 
   async function cancelInvite(inviteId) {
@@ -369,5 +386,5 @@
 
   window.addEventListener('online', () => scheduleRefresh());
 
-  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, reset, isConnected: () => Boolean(workspaceId), paymentsAvailable: () => paymentsAvailable, getWorkspaceId: () => workspaceId };
+  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, updateProfile, reset, isConnected: () => Boolean(workspaceId), paymentsAvailable: () => paymentsAvailable, getWorkspaceId: () => workspaceId };
 })();

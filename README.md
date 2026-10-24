@@ -19,10 +19,18 @@ The service worker is network-first, so a deploy shows up on the next load. Bump
 ## Supabase setup
 
 1. Run `supabase/migrations/0001_initial_schema.sql` in the Supabase SQL Editor. It is re-runnable and resets Tempo's tables.
-   Then run `0002_week_payments.sql` (weekly paid amounts; safe to re-run, keeps existing data).
+   Then run `0002_week_payments.sql` (weekly paid amounts) and `0003_payer_role_and_venmo.sql` (payer access level, Venmo usernames). Both are safe to re-run and keep existing data.
 2. Authentication → URL Configuration: Site URL `https://timeclock.caseycaudle.workers.dev`, and add `https://timeclock.caseycaudle.workers.dev/**` and `http://localhost:8080/**` as redirect URLs.
 
 On first sign-in the app calls `bootstrap_workspace()`, which accepts any pending invite for that email or creates a personal workspace with default jobs. The owner invites people from **Jobs & rates → People → + Invite**; the invitee gets a sign-in link by email.
+
+Access levels when inviting:
+- **Payer**: sees all hours and balances, records payments (including **Pay with Venmo** in Week view), plans shifts, and creates jobs with their own rates. Can't change time entries or jobs and rates someone else made. Enforced by row-level security, not just the UI.
+- **Member**: full access, including editing time entries.
+
+Each person can set a display name and Venmo username under **Account**.
+
+Future ideas are in [BACKLOG.md](BACKLOG.md).
 
 ## Run locally
 

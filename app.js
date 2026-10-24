@@ -199,6 +199,14 @@ function removedPersonById(id) { return (state.removedPeople || []).find((person
 function personName(id) { return personById(id)?.name || removedPersonById(id)?.name || (id === 'general' ? 'General' : 'Removed member'); }
 function jobName(id) { return jobById(id)?.name || 'Unassigned'; }
 function activeEntries() { return state.entries.filter((entry) => !entry.deletedAt && !entry.end); }
+function currentRoleKey() {
+  const me = personById(state.currentUserId);
+  return me?.roleKey || (/owner|admin/i.test(me?.role || '') ? 'owner' : 'member');
+}
+// Payers see everything but only change payments, planned shifts, and jobs they created.
+function canEditTime() { return currentRoleKey() !== 'payer'; }
+function canManageJob(job) { return canEditTime() || Boolean(job && job.createdBy === state.currentUserId); }
+function defaultSchedulePersonId() { return canEditTime() ? state.currentUserId : (state.people.find((person) => person.roleKey !== 'payer')?.id || state.currentUserId); }
 function canManageMembers() { return /owner|admin/i.test(personById(state.currentUserId)?.role || '') || state.currentUserId === 'casey'; }
 function generalWorkJob() { return state.jobs.find((job) => !job.deletedAt && String(job.name || '').trim().toLowerCase() === 'general work'); }
 
@@ -331,6 +339,7 @@ function recordAudit(action, detail) {
 }
 
 function renderAll() {
+  document.body.classList.toggle('role-payer', !canEditTime());
   renderSyncStatus();
   renderHeader();
   renderOverview();
@@ -394,7 +403,7 @@ function renderOverview() {
   renderQuickClock();
   const activeContainer = $('#active-clocks');
   const quickJob = generalWorkJob();
-  const active = activeEntries().filter((entry) => !(quickJob && entry.personId === state.currentUserId && entry.jobId === quickJob.id)).sort((a, b) => new Date(a.start) - new Date(b.start));
+  const active = !canEditTime() ? [] : activeEntries().filter((entry) => !(quickJob && entry.personId === state.currentUserId && entry.jobId === quickJob.id)).sort((a, b) => new Date(a.start) - new Date(b.start));
   activeContainer.innerHTML = active.length ? `<div class="active-clock-heading">Other active clocks</div>${active.map(renderActiveClock).join('')}` : '';
   activeContainer.classList.toggle('hidden', !active.length);
 
@@ -414,6 +423,14 @@ function quickClockEntry() {
 function renderQuickClock() {
   const container = $('#quick-clock');
   const stateLabel = $('#quick-clock-state');
+  if (!canEditTime()) {
+    const running = activeEntries().sort((a, b) => new Date(a.start) - new Date(b.start));
+    stateLabel.textContent = running.length ? 'Running' : 'Idle';
+    container.innerHTML = running.length
+      ? running.map((entry) => `<div class="quick-clock-row running"><div><div class="quick-clock-title">${escapeHtml(personName(entry.personId))} · ${escapeHtml(jobName(entry.jobId))}</div><div class="quick-clock-elapsed">${formatHours(rawEntryMinutes(entry))}</div><div class="quick-clock-help">Clocked in at ${formatTime(entry.start)}</div></div></div>`).join('')
+      : '<div class="quick-clock-row"><div><div class="quick-clock-title">No one is clocked in</div><div class="quick-clock-help">Live time shows here when a clock is running.</div></div></div>';
+    return;
+  }
   const entry = quickClockEntry();
   if (!entry) {
     stateLabel.textContent = 'Ready';
@@ -440,7 +457,8 @@ function renderActiveClock(entry) {
 
 function renderRecentEntry(entry) {
   const date = entryDateKey(entry);
-  return `<button type="button" class="entry-row entry-row-button" data-edit-entry="${entry.id}" aria-label="Edit ${escapeHtml(jobName(entry.jobId))} entry"><div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div></button>`;
+  const open = canEditTime() ? `<button type="button" class="entry-row entry-row-button" data-edit-entry="${entry.id}" aria-label="Edit ${escapeHtml(jobName(entry.jobId))} entry">` : '<div class="entry-row">';
+  return `${open}<div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div>${canEditTime() ? '</button>' : '</div>'}`;
 }
 
 function renderShift(shift) {
@@ -475,26 +493,44 @@ function renderWeek() {
   }).join('');
 }
 
+let pendingVenmo = null; // { personId, weekStart, amount } after "Pay with Venmo" opens Venmo
+
+function venmoLink(person, amount, weekStart) {
+  const note = `Tempo · week of ${formatDate(weekStart, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  return `https://venmo.com/${encodeURIComponent(person.venmo)}?txn=pay&amount=${amount.toFixed(2)}&note=${encodeURIComponent(note)}`;
+}
+
+function renderVenmoControls(person, totals, start) {
+  if (pendingVenmo && pendingVenmo.personId === person.id && pendingVenmo.weekStart === start) {
+    return `<div class="venmo-confirm" role="group" aria-label="Confirm Venmo payment"><span>Did you send ${formatMoney(pendingVenmo.amount)} on Venmo?</span><button type="button" class="button primary-button" data-venmo-confirm="${person.id}">Yes, record it</button><button type="button" class="button secondary-button" data-venmo-cancel="${person.id}">Not yet</button></div>`;
+  }
+  if (person.id === state.currentUserId || !person.venmo || totals.balance <= 0) return '';
+  return `<a class="button venmo-button" href="${venmoLink(person, totals.balance, start)}" target="_blank" rel="noopener" data-venmo-pay="${person.id}" data-venmo-amount="${totals.balance}">Pay ${formatMoney(totals.balance)} with Venmo</a>`;
+}
+
 function renderWeekPayments(start) {
-  const people = [...state.people];
+  const people = state.people.filter((person) => person.roleKey !== 'payer');
   weekEntries(start).forEach((entry) => { if (!people.some((person) => person.id === entry.personId)) people.push({ id: entry.personId, name: personName(entry.personId), initials: '?', avatar: 'indigo' }); });
   const rows = people.map((person) => {
     const totals = personWeekTotals(person.id, start);
     const status = paymentStatus(totals);
-    return `<div class="payment-row"><div class="avatar avatar-${person.avatar || 'indigo'}">${escapeHtml(person.initials || '?')}</div><div class="payment-person"><strong>${escapeHtml(person.name)}</strong><span>${formatDecimalHours(totals.minutes)}h · earned ${formatMoney(totals.earned)}</span></div><label class="field payment-input"><span>Paid</span><div class="input-prefix"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-payment-person="${person.id}" value="${totals.paid ? totals.paid.toFixed(2) : ''}" placeholder="0.00" aria-label="Amount paid to ${escapeHtml(person.name)} for this week" /></div></label><button type="button" class="button secondary-button payment-full-button" data-pay-full="${person.id}" ${totals.earned <= 0 || totals.balance === 0 ? 'disabled' : ''}>Mark paid in full</button><div class="payment-balance ${status.tone}"><span>Balance</span><strong>${formatMoney(Math.max(0, totals.balance))}</strong><em>${escapeHtml(status.label)}</em></div></div>`;
+    return `<div class="payment-row"><div class="avatar avatar-${person.avatar || 'indigo'}">${escapeHtml(person.initials || '?')}</div><div class="payment-person"><strong>${escapeHtml(person.name)}</strong><span>${formatDecimalHours(totals.minutes)}h · earned ${formatMoney(totals.earned)}</span></div><label class="field payment-input"><span>Paid</span><div class="input-prefix"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-payment-person="${person.id}" value="${totals.paid ? totals.paid.toFixed(2) : ''}" placeholder="0.00" aria-label="Amount paid to ${escapeHtml(person.name)} for this week" /></div></label><button type="button" class="button secondary-button payment-full-button" data-pay-full="${person.id}" ${totals.earned <= 0 || totals.balance === 0 ? 'disabled' : ''}>Mark paid in full</button><div class="payment-balance ${status.tone}"><span>Balance</span><strong>${formatMoney(Math.max(0, totals.balance))}</strong><em>${escapeHtml(status.label)}</em></div>${renderVenmoControls(person, totals, start)}</div>`;
   }).join('');
+  const me = personById(state.currentUserId);
+  const venmoHint = canEditTime() && me && !me.venmo && state.people.some((person) => person.roleKey === 'payer') ? '<p class="muted small-text payment-help">Add your Venmo username under Account so your payer can pay you straight from this page.</p>' : '';
   const totals = weekPaymentTotals(start);
   const status = paymentStatus(totals);
   $('#week-payment-badge').textContent = status.label;
   $('#week-payment-badge').className = `soft-badge payment-badge ${status.tone}`;
   const footer = people.length > 1 ? `<div class="payment-totals"><span>Week total</span><span>Earned <strong>${formatMoney(totals.earned)}</strong></span><span>Paid <strong>${formatMoney(totals.paid)}</strong></span><span>Balance <strong>${formatMoney(Math.max(0, totals.balance))}</strong></span></div>` : '';
-  $('#week-payments').innerHTML = rows + footer;
+  $('#week-payments').innerHTML = rows + footer + venmoHint;
 }
 
 function renderTableEntry(entry) {
   const range = entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'Active'}`;
   const breakAction = entry.mode === 'duration' ? '' : `<button data-add-break-entry="${entry.id}">Break</button>`;
-  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div><div class="table-actions">${breakAction}<button data-edit-entry="${entry.id}">Edit</button><button data-delete-entry="${entry.id}">Delete</button></div></div></div>`;
+  const actions = canEditTime() ? `<div class="table-actions">${breakAction}<button data-edit-entry="${entry.id}">Edit</button><button data-delete-entry="${entry.id}">Delete</button></div>` : '';
+  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div>${actions}</div></div>`;
 }
 
 function colorForJob(jobId) {
@@ -541,24 +577,29 @@ function renderCalendarWeekTotal(startKey) {
   return `<button type="button" class="calendar-week-total ${minutes ? '' : 'empty'} ${current ? 'current' : ''}" data-calendar-week="${startKey}" aria-label="Open week of ${formatDate(startKey, { month: 'long', day: 'numeric' })}: ${formatDecimalHours(minutes)} hours, ${formatMoney(pay)}${status.tone === 'none' ? '' : `, ${status.label}`}"><strong>${formatDecimalHours(minutes)}h</strong><span>${formatMoney(pay)}</span>${statusLine}</button>`;
 }
 
+// The rate column shows the worker's rate; a payer has no rate of their own.
+function rateViewPersonId() { return canEditTime() ? state.currentUserId : defaultSchedulePersonId(); }
+
 function jobRateCount(job) { return Object.values(job.rates || {}).filter((rate) => rate !== null && rate !== undefined && rate !== '').length; }
 
 function renderJobs() {
   const invites = state.invites || [];
   $('#member-count').textContent = `${state.people.length} member${state.people.length === 1 ? '' : 's'}`;
   $('#invite-member-button').classList.toggle('hidden', !canManageMembers());
-  const peopleRows = state.people.map((person) => `<div class="person-row"><div class="avatar avatar-${person.avatar}">${person.initials}</div><div class="person-info"><strong>${escapeHtml(person.name)}</strong><span>${escapeHtml(person.role)}</span></div><div class="person-rate-control"><div class="person-rate">${formatMoney(person.defaultRate)}/h</div><div class="person-row-actions">${canManageMembers() ? `<button class="text-button" data-edit-person-rate="${person.id}">Edit</button>` : ''}${canManageMembers() && person.id !== state.currentUserId ? `<button class="text-button danger-text" data-remove-person="${person.id}">Remove</button>` : ''}</div></div></div>`).join('');
-  const inviteRows = invites.map((invite) => `<div class="person-row invite-row"><div class="avatar avatar-pending">✉</div><div class="person-info"><strong>${escapeHtml(invite.email)}</strong><span>Invited · waiting for them to sign in</span></div><div class="person-rate-control"><div class="person-rate">${formatMoney(invite.defaultRate)}/h</div><div class="person-row-actions"><button class="text-button danger-text" data-cancel-invite="${invite.id}">Cancel</button></div></div></div>`).join('');
+  const peopleRows = state.people.map((person) => `<div class="person-row"><div class="avatar avatar-${person.avatar}">${person.initials}</div><div class="person-info"><strong>${escapeHtml(person.name)}</strong><span>${escapeHtml(person.role)}</span></div><div class="person-rate-control"><div class="person-rate">${person.roleKey === 'payer' ? '—' : `${formatMoney(person.defaultRate)}/h`}</div><div class="person-row-actions">${canManageMembers() && person.roleKey !== 'payer' ? `<button class="text-button" data-edit-person-rate="${person.id}">Edit</button>` : ''}${canManageMembers() && person.id !== state.currentUserId ? `<button class="text-button danger-text" data-remove-person="${person.id}">Remove</button>` : ''}</div></div></div>`).join('');
+  const inviteRows = invites.map((invite) => `<div class="person-row invite-row"><div class="avatar avatar-pending">✉</div><div class="person-info"><strong>${escapeHtml(invite.email)}</strong><span>Invited as ${escapeHtml(invite.role || 'Member')} · waiting for them to sign in</span></div><div class="person-rate-control"><div class="person-rate">${formatMoney(invite.defaultRate)}/h</div><div class="person-row-actions"><button class="text-button danger-text" data-cancel-invite="${invite.id}">Cancel</button></div></div></div>`).join('');
   $('#people-list').innerHTML = peopleRows + inviteRows;
   $('#jobs-list').innerHTML = state.jobs.filter((job) => !job.deletedAt).map((job) => {
     const count = jobRateCount(job);
-    return `<div class="job-row"><span class="job-color ${job.color}"></span><button type="button" class="job-info job-edit-area" data-edit-job="${job.id}" aria-label="Edit ${escapeHtml(job.name)}"><strong>${escapeHtml(job.name)}</strong><span>${job.general ? 'General job' : 'Assigned job'} · ${count ? `${count} custom rate${count === 1 ? '' : 's'}` : 'default rates'}</span></button><div class="job-rate">${formatMoney(job.rates?.[state.currentUserId] ?? personById(state.currentUserId)?.defaultRate ?? 0)}/h</div><button type="button" class="text-button" data-edit-job="${job.id}">Edit</button></div>`;
+    const editable = canManageJob(job);
+    return `<div class="job-row"><span class="job-color ${job.color}"></span><${editable ? 'button type="button"' : 'div'} class="job-info ${editable ? 'job-edit-area' : ''}" ${editable ? `data-edit-job="${job.id}" aria-label="Edit ${escapeHtml(job.name)}"` : ''}><strong>${escapeHtml(job.name)}</strong><span>${job.general ? 'General job' : 'Assigned job'} · ${count ? `${count} custom rate${count === 1 ? '' : 's'}` : 'default rates'}${job.createdBy && job.createdBy !== state.currentUserId && personById(job.createdBy)?.roleKey === 'payer' ? ` · added by ${escapeHtml(personName(job.createdBy))}` : ''}</span></${editable ? 'button' : 'div'}><div class="job-rate">${formatMoney(job.rates?.[rateViewPersonId()] ?? personById(rateViewPersonId())?.defaultRate ?? 0)}/h</div>${canManageJob(job) ? `<button type="button" class="text-button" data-edit-job="${job.id}">Edit</button>` : '<span class="job-locked" title="Only the person who created this job can change it">View only</span>'}</div>`;
   }).join('');
 }
 
 function openJobModal(jobId = null) {
   const job = jobId ? state.jobs.find((item) => item.id === jobId && !item.deletedAt) : null;
   if (jobId && !job) return;
+  if (job && !canManageJob(job)) { showToast('Only the person who created this job can change it'); return; }
   $('#job-form').reset();
   $('#job-modal-id').value = job?.id || '';
   $('#job-modal-title').textContent = job ? 'Edit job' : 'Add job';
@@ -567,7 +608,7 @@ function openJobModal(jobId = null) {
   $('#job-modal-color').value = job?.color || 'indigo';
   $('#job-modal-general').checked = job ? Boolean(job.general) : true;
   $('#job-modal-delete').classList.toggle('hidden', !job);
-  $('#job-modal-rates').innerHTML = state.people.map((person) => {
+  $('#job-modal-rates').innerHTML = state.people.filter((person) => person.roleKey !== 'payer').map((person) => {
     const rate = job?.rates?.[person.id];
     const value = rate === null || rate === undefined || rate === '' ? '' : Number(rate).toFixed(2);
     return `<label class="field job-rate-field"><span>${escapeHtml(person.name)}</span><div class="input-prefix"><span>$</span><input type="number" min="0" step="0.01" data-job-rate-person="${person.id}" value="${value}" placeholder="${Number(person.defaultRate || 0).toFixed(2)} default" /></div></label>`;
@@ -597,7 +638,7 @@ function handleJobSubmit(event) {
     recordAudit('Updated', `${name} job and rates`);
     closeModal('job-modal'); commit('Job updated'); return;
   }
-  state.jobs.push({ id: generateUuid(), ...fields, rates, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  state.jobs.push({ id: generateUuid(), ...fields, rates, createdBy: state.currentUserId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   recordAudit('Created', `${name} job`);
   closeModal('job-modal'); commit('Job added');
 }
@@ -606,7 +647,8 @@ function openInviteModal() {
   if (!canManageMembers()) { showToast('Only the workspace owner can invite people'); return; }
   if (!window.TempoCloud?.isConnected?.()) { showToast('Connect to the cloud workspace before inviting someone'); return; }
   $('#invite-form').reset();
-  $('#invite-rate').value = Number(personById(state.currentUserId)?.defaultRate || 0).toFixed(2);
+  $('#invite-rate').value = '0.00';
+  $('#invite-role').value = 'payer';
   $('#invite-message').textContent = '';
   openModal('invite-modal');
   setTimeout(() => $('#invite-email').focus(), 50);
@@ -621,7 +663,7 @@ async function handleInviteSubmit(event) {
   submit.disabled = true;
   $('#invite-message').textContent = 'Sending invite…';
   try {
-    const result = await window.TempoCloud.inviteMember(email, rate);
+    const result = await window.TempoCloud.inviteMember(email, rate, $('#invite-role').value);
     closeModal('invite-modal');
     showToast(result.emailSent ? `Invite emailed to ${email}` : `Invite saved. Ask ${email} to create an account with that email.`);
     if (!result.emailSent) console.warn('[Tempo] Invite email was not sent', result.emailError);
@@ -652,7 +694,7 @@ function populateSelects() {
   const personOptions = state.people.map((person) => `<option value="${person.id}">${escapeHtml(person.name)}</option>`).join('');
   $('#entry-job').innerHTML = jobOptions; $('#shift-job').innerHTML = jobOptions;
   $('#entry-person').innerHTML = personOptions; $('#shift-person').innerHTML = `<option value="general">General</option>${personOptions}`;
-  $('#entry-person').value = state.currentUserId; $('#shift-person').value = state.currentUserId;
+  $('#entry-person').value = state.currentUserId; $('#shift-person').value = defaultSchedulePersonId();
 }
 
 function setEntryMode(mode) {
@@ -663,6 +705,7 @@ function setEntryMode(mode) {
 }
 
 function openEntryModal(mode = 'timer', entryId = null) {
+  if (!canEditTime()) { showToast('Time entries are view-only for payers'); return; }
   $('#entry-form').reset();
   const nowInput = isoToInput(new Date().toISOString());
   $('#entry-start').value = nowInput;
@@ -706,6 +749,12 @@ function openEntryModalForDate(dateKey) {
   $('#entry-end').value = `${dateKey}T13:00`;
 }
 
+function openShiftModalForDate(dateKey) {
+  openShiftModal();
+  $('#shift-start').value = `${dateKey}T09:00`;
+  $('#shift-end').value = `${dateKey}T13:00`;
+}
+
 function openShiftModal(shiftId = null) {
   $('#shift-form').reset();
   $('#shift-id').value = '';
@@ -716,7 +765,7 @@ function openShiftModal(shiftId = null) {
   $('#shift-start').value = `${tomorrow}T09:00`;
   $('#shift-end').value = `${tomorrow}T13:00`;
   $('#shift-job').value = state.jobs[0]?.id || '';
-  $('#shift-person').value = state.currentUserId;
+  $('#shift-person').value = defaultSchedulePersonId();
   if (shiftId) {
     const shift = state.shifts.find((item) => item.id === shiftId);
     if (!shift) return;
@@ -741,8 +790,35 @@ function openAccountModal() {
     $('#account-modal-rate').textContent = `${formatMoney(person.defaultRate)}/hour`;
     $('#account-modal-avatar').textContent = person.initials || 'TU';
     $('#account-modal-avatar').className = `avatar avatar-${person.avatar || 'indigo'}`;
+    $('#account-modal-rate').textContent = person.roleKey === 'payer' ? 'Not applicable' : `${formatMoney(person.defaultRate)}/hour`;
+    $('#profile-name').value = person.name || '';
+    $('#profile-venmo').value = person.venmo || '';
+    $('#profile-message').textContent = '';
   }
   openModal('account-modal');
+}
+
+async function handleProfileSubmit(event) {
+  event.preventDefault();
+  const name = $('#profile-name').value.trim();
+  const venmo = $('#profile-venmo').value.trim().replace(/^@/, '');
+  if (!name) { $('#profile-message').textContent = 'Enter a display name.'; return; }
+  if (venmo && !/^[A-Za-z0-9_-]{1,40}$/.test(venmo)) { $('#profile-message').textContent = 'Venmo usernames use letters, numbers, - and _ only.'; return; }
+  $('#profile-save').disabled = true;
+  try {
+    if (window.TempoCloud?.isConnected?.()) await window.TempoCloud.updateProfile({ name, venmo });
+    else {
+      const person = personById(state.currentUserId);
+      if (person) Object.assign(person, { name, initials: name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase(), venmo });
+      commit();
+    }
+    closeModal('account-modal');
+    showToast('Profile saved');
+  } catch (error) {
+    $('#profile-message').textContent = error?.message || 'The profile could not be saved.';
+  } finally {
+    $('#profile-save').disabled = false;
+  }
 }
 
 function removePerson(personId) {
@@ -959,6 +1035,7 @@ function bindEvents() {
   $('#job-modal-delete').addEventListener('click', () => { const id = $('#job-modal-id').value; if (id) deleteJob(id); });
   $('#invite-member-button').addEventListener('click', openInviteModal);
   $('#invite-form').addEventListener('submit', handleInviteSubmit);
+  $('#profile-form').addEventListener('submit', handleProfileSubmit);
   $('#sync-card').addEventListener('click', () => { if (state.sync?.status === 'attention') window.TempoCloud?.refresh?.(); });
   $('#recent-entries').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); });
   $('#unpaid-card').addEventListener('click', openOldestUnpaidWeek);
@@ -973,6 +1050,11 @@ function bindEvents() {
   });
   $('#week-payments').addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.matches('[data-payment-person]')) event.target.blur(); });
   $('#week-payments').addEventListener('click', (event) => {
+    const pay = event.target.closest('[data-venmo-pay]');
+    if (pay) { pendingVenmo = { personId: pay.dataset.venmoPay, weekStart: viewedWeekStart(), amount: roundCents(pay.dataset.venmoAmount) }; setTimeout(() => renderWeekPayments(viewedWeekStart()), 0); return; }
+    const confirmPay = event.target.closest('[data-venmo-confirm]');
+    if (confirmPay && pendingVenmo) { const { personId, weekStart, amount } = pendingVenmo; pendingVenmo = null; setWeekPayment(personId, weekStart, personWeekTotals(personId, weekStart).paid + amount); return; }
+    if (event.target.closest('[data-venmo-cancel]')) { pendingVenmo = null; renderWeekPayments(viewedWeekStart()); return; }
     const button = event.target.closest('[data-pay-full]');
     if (button) setWeekPayment(button.dataset.payFull, viewedWeekStart(), personWeekTotals(button.dataset.payFull, viewedWeekStart()).earned);
   });
@@ -1000,7 +1082,7 @@ function bindEvents() {
   $('#active-clocks').addEventListener('click', (event) => { const stop = event.target.closest('[data-stop-entry]'); const toggle = event.target.closest('[data-break-entry]'); if (stop) stopClock(stop.dataset.stopEntry); if (toggle) toggleBreak(toggle.dataset.breakEntry); });
   $('#week-table').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); const remove = event.target.closest('[data-delete-entry]'); const addBreak = event.target.closest('[data-add-break-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); if (remove) deleteEntry(remove.dataset.deleteEntry); if (addBreak) openBreakModal(addBreak.dataset.addBreakEntry); });
   $('#upcoming-shifts').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-shift]'); const remove = event.target.closest('[data-delete-shift]'); if (edit) openShiftModal(edit.dataset.editShift); if (remove) deleteShift(remove.dataset.deleteShift); });
-  $('#calendar-grid').addEventListener('click', (event) => { const entry = event.target.closest('[data-calendar-entry]'); const shift = event.target.closest('[data-calendar-shift]'); const day = event.target.closest('[data-calendar-day]'); const week = event.target.closest('[data-calendar-week]'); if (week) { showWeek(week.dataset.calendarWeek); navigate('week'); } else if (entry) openEntryModal('range', entry.dataset.calendarEntry); else if (shift) openShiftModal(shift.dataset.calendarShift); else if (day) openEntryModalForDate(day.dataset.calendarDay); });
+  $('#calendar-grid').addEventListener('click', (event) => { const entry = event.target.closest('[data-calendar-entry]'); const shift = event.target.closest('[data-calendar-shift]'); const day = event.target.closest('[data-calendar-day]'); const week = event.target.closest('[data-calendar-week]'); if (week) { showWeek(week.dataset.calendarWeek); navigate('week'); } else if (!canEditTime() && entry) showToast('Time entries are view-only for payers'); else if (!canEditTime() && day) openShiftModalForDate(day.dataset.calendarDay); else if (entry) openEntryModal('range', entry.dataset.calendarEntry); else if (shift) openShiftModal(shift.dataset.calendarShift); else if (day) openEntryModalForDate(day.dataset.calendarDay); });
   $('#calendar-prev').addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() - 1); renderCalendar(); });
   $('#calendar-next').addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() + 1); renderCalendar(); });
   $('#calendar-today-button').addEventListener('click', () => { calendarCursor = new Date(); calendarCursor.setDate(1); renderCalendar(); });
