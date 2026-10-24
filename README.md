@@ -19,6 +19,7 @@ The service worker is network-first, so a deploy shows up on the next load. Bump
 ## Supabase setup
 
 1. Run `supabase/migrations/0001_initial_schema.sql` in the Supabase SQL Editor. It is re-runnable and resets Tempo's tables.
+   Then run `0002_week_payments.sql` (weekly paid amounts; safe to re-run, keeps existing data).
 2. Authentication → URL Configuration: Site URL `https://timeclock.caseycaudle.workers.dev`, and add `https://timeclock.caseycaudle.workers.dev/**` and `http://localhost:8080/**` as redirect URLs.
 
 On first sign-in the app calls `bootstrap_workspace()`, which accepts any pending invite for that email or creates a personal workspace with default jobs. The owner invites people from **Jobs & rates → People → + Invite**; the invitee gets a sign-in link by email.

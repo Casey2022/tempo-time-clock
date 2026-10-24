@@ -150,6 +150,7 @@ function initialState() {
 function loadState() {
   const saved = TempoStore.load(initialState());
   saved.removedPeople = Array.isArray(saved.removedPeople) ? saved.removedPeople : [];
+  saved.payments = Array.isArray(saved.payments) ? saved.payments : [];
   return saved;
 }
 
@@ -253,6 +254,42 @@ function viewedWeekStart() { return weekCursor || mondayKey(); }
 function showWeek(startKey) {
   weekCursor = startKey === mondayKey() ? null : startKey;
   renderWeek();
+}
+
+const roundCents = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+function paymentFor(personId, weekStart) {
+  return (state.payments || []).find((payment) => payment.personId === personId && payment.weekStart === weekStart) || null;
+}
+
+function personWeekTotals(personId, weekStart) {
+  const entries = weekEntries(weekStart).filter((entry) => entry.personId === personId);
+  const earned = roundCents(entries.reduce((total, entry) => total + entryPay(entry), 0));
+  const paid = roundCents(paymentFor(personId, weekStart)?.amountPaid || 0);
+  return { minutes: entries.reduce((total, entry) => total + entryMinutes(entry), 0), earned, paid, balance: roundCents(earned - paid) };
+}
+
+function weekPaymentTotals(weekStart) {
+  const ids = new Set([...state.people.map((person) => person.id), ...weekEntries(weekStart).map((entry) => entry.personId), ...(state.payments || []).filter((payment) => payment.weekStart === weekStart).map((payment) => payment.personId)]);
+  return [...ids].map((id) => personWeekTotals(id, weekStart)).reduce((sum, item) => ({ earned: roundCents(sum.earned + item.earned), paid: roundCents(sum.paid + item.paid), balance: roundCents(sum.balance + item.balance) }), { earned: 0, paid: 0, balance: 0 });
+}
+
+function paymentStatus({ earned, paid, balance }) {
+  if (earned <= 0 && paid <= 0) return { tone: 'none', label: 'Nothing earned' };
+  if (balance < 0) return { tone: 'over', label: `Overpaid ${formatMoney(-balance)}` };
+  if (balance === 0) return { tone: 'paid', label: 'Paid in full' };
+  if (paid > 0) return { tone: 'partial', label: `${formatMoney(balance)} remaining` };
+  return { tone: 'due', label: `${formatMoney(balance)} unpaid` };
+}
+
+function setWeekPayment(personId, weekStart, amount) {
+  const value = roundCents(Math.max(0, amount));
+  const existing = paymentFor(personId, weekStart);
+  const previous = existing?.amountPaid || 0;
+  if (existing) Object.assign(existing, { amountPaid: value, updatedAt: new Date().toISOString() });
+  else state.payments.push({ personId, weekStart, amountPaid: value, updatedAt: new Date().toISOString() });
+  recordAudit('Updated', `${personName(personId)} · week of ${formatDate(weekStart)} paid ${formatMoney(previous)} → ${formatMoney(value)}`);
+  commit(value === 0 ? 'Payment cleared' : `Recorded ${formatMoney(value)} paid`);
 }
 
 function recordAudit(action, detail) {
@@ -395,6 +432,8 @@ function renderWeek() {
   $('#week-view-eyebrow').textContent = `${formatDate(start, { weekday: 'long', month: 'long', day: 'numeric' })} – ${formatDate(end, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
   $('#week-view-label').textContent = isCurrent ? `This week · ${weekLabel(start)}` : weekLabel(start);
   if (document.activeElement !== $('#week-view-picker')) $('#week-view-picker').value = start;
+  // renderWeek runs every second while a clock is live; don't redraw under someone typing an amount.
+  if (!document.activeElement?.matches?.('#week-payments [data-payment-person]')) renderWeekPayments(start);
   $('#week-this-button').disabled = isCurrent;
   $('#week-table').innerHTML = Array.from({ length: 7 }, (_, index) => {
     const day = addDaysToKey(start, index);
@@ -402,6 +441,22 @@ function renderWeek() {
     const dayTotal = dayEntries.reduce((total, entry) => total + entryMinutes(entry), 0);
     return `<div class="day-group"><div class="day-header"><strong>${formatDate(day, { weekday: 'long', month: 'short', day: 'numeric' })}</strong><span>${dayTotal ? formatHours(dayTotal) : 'No time logged'}</span></div>${dayEntries.length ? dayEntries.map(renderTableEntry).join('') : '<div class="empty-day">No entries</div>'}</div>`;
   }).join('');
+}
+
+function renderWeekPayments(start) {
+  const people = [...state.people];
+  weekEntries(start).forEach((entry) => { if (!people.some((person) => person.id === entry.personId)) people.push({ id: entry.personId, name: personName(entry.personId), initials: '?', avatar: 'indigo' }); });
+  const rows = people.map((person) => {
+    const totals = personWeekTotals(person.id, start);
+    const status = paymentStatus(totals);
+    return `<div class="payment-row"><div class="avatar avatar-${person.avatar || 'indigo'}">${escapeHtml(person.initials || '?')}</div><div class="payment-person"><strong>${escapeHtml(person.name)}</strong><span>${formatDecimalHours(totals.minutes)}h · earned ${formatMoney(totals.earned)}</span></div><label class="field payment-input"><span>Paid</span><div class="input-prefix"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-payment-person="${person.id}" value="${totals.paid ? totals.paid.toFixed(2) : ''}" placeholder="0.00" aria-label="Amount paid to ${escapeHtml(person.name)} for this week" /></div></label><button type="button" class="button secondary-button payment-full-button" data-pay-full="${person.id}" ${totals.earned <= 0 || totals.balance === 0 ? 'disabled' : ''}>Mark paid in full</button><div class="payment-balance ${status.tone}"><span>Balance</span><strong>${formatMoney(Math.max(0, totals.balance))}</strong><em>${escapeHtml(status.label)}</em></div></div>`;
+  }).join('');
+  const totals = weekPaymentTotals(start);
+  const status = paymentStatus(totals);
+  $('#week-payment-badge').textContent = status.label;
+  $('#week-payment-badge').className = `soft-badge payment-badge ${status.tone}`;
+  const footer = people.length > 1 ? `<div class="payment-totals"><span>Week total</span><span>Earned <strong>${formatMoney(totals.earned)}</strong></span><span>Paid <strong>${formatMoney(totals.paid)}</strong></span><span>Balance <strong>${formatMoney(Math.max(0, totals.balance))}</strong></span></div>` : '';
+  $('#week-payments').innerHTML = rows + footer;
 }
 
 function renderTableEntry(entry) {
@@ -449,7 +504,9 @@ function renderCalendarWeekTotal(startKey) {
   const minutes = entries.reduce((total, entry) => total + entryMinutes(entry), 0);
   const pay = entries.reduce((total, entry) => total + entryPay(entry), 0);
   const current = startKey === mondayKey();
-  return `<button type="button" class="calendar-week-total ${minutes ? '' : 'empty'} ${current ? 'current' : ''}" data-calendar-week="${startKey}" aria-label="Open week of ${formatDate(startKey, { month: 'long', day: 'numeric' })}: ${formatHours(minutes)}, ${formatMoney(pay)}"><strong>${formatHours(minutes)}</strong><span>${formatMoney(pay)}</span></button>`;
+  const status = paymentStatus(weekPaymentTotals(startKey));
+  const statusLine = status.tone === 'paid' ? '<em class="week-pay-status paid">✓ Paid</em>' : status.tone === 'partial' ? `<em class="week-pay-status partial">${escapeHtml(status.label.replace(' remaining', ' due'))}</em>` : status.tone === 'over' ? `<em class="week-pay-status over">${escapeHtml(status.label)}</em>` : '';
+  return `<button type="button" class="calendar-week-total ${minutes ? '' : 'empty'} ${current ? 'current' : ''}" data-calendar-week="${startKey}" aria-label="Open week of ${formatDate(startKey, { month: 'long', day: 'numeric' })}: ${formatDecimalHours(minutes)} hours, ${formatMoney(pay)}${status.tone === 'none' ? '' : `, ${status.label}`}"><strong>${formatDecimalHours(minutes)}h</strong><span>${formatMoney(pay)}</span>${statusLine}</button>`;
 }
 
 function jobRateCount(job) { return Object.values(job.rates || {}).filter((rate) => rate !== null && rate !== undefined && rate !== '').length; }
@@ -872,6 +929,19 @@ function bindEvents() {
   $('#invite-form').addEventListener('submit', handleInviteSubmit);
   $('#sync-card').addEventListener('click', () => { if (state.sync?.status === 'attention') window.TempoCloud?.refresh?.(); });
   $('#recent-entries').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); });
+  $('#week-payments').addEventListener('change', (event) => {
+    const input = event.target.closest('[data-payment-person]');
+    if (!input) return;
+    const amount = input.value.trim() === '' ? 0 : Number(input.value);
+    if (!Number.isFinite(amount) || amount < 0) { showToast('Enter a paid amount of zero or more'); input.value = ''; return; }
+    input.blur();
+    setWeekPayment(input.dataset.paymentPerson, viewedWeekStart(), amount);
+  });
+  $('#week-payments').addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.matches('[data-payment-person]')) event.target.blur(); });
+  $('#week-payments').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-pay-full]');
+    if (button) setWeekPayment(button.dataset.payFull, viewedWeekStart(), personWeekTotals(button.dataset.payFull, viewedWeekStart()).earned);
+  });
   $('#week-prev').addEventListener('click', () => showWeek(addDaysToKey(viewedWeekStart(), -7)));
   $('#week-next').addEventListener('click', () => showWeek(addDaysToKey(viewedWeekStart(), 7)));
   $('#week-this-button').addEventListener('click', () => showWeek(mondayKey()));
@@ -908,7 +978,7 @@ setInterval(() => { renderOverview(); if (activeView === 'week') renderWeek(); }
 
 window.TempoApp = {
   getState: () => state,
-  replaceState: (nextState) => { state = { ...nextState, removedPeople: nextState.removedPeople || state.removedPeople || [], invites: nextState.invites || [] }; TempoStore.save(state); renderAll(); },
+  replaceState: (nextState) => { state = { ...nextState, removedPeople: nextState.removedPeople || state.removedPeople || [], invites: nextState.invites || [], payments: nextState.payments || [] }; TempoStore.save(state); renderAll(); },
   setLocalDemoMode: () => { renderAll(); },
   setSyncStatus,
   showToast,

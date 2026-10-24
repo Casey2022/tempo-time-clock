@@ -5,6 +5,8 @@
   let refreshTimer = null;
   let syncing = null;
   let channel = null;
+  // False until 0002_week_payments.sql has been run, so the rest of sync keeps working without it.
+  let paymentsAvailable = true;
 
   const isUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const newId = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`);
@@ -12,6 +14,7 @@
   const initialsFor = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'TU';
   const cents = (value) => Math.max(0, Math.round(Number(value || 0) * 100));
   const check = (result) => { if (result.error) throw result.error; return result.data; };
+  const isMissingTable = (error) => error?.code === 'PGRST205' || error?.code === '42P01';
 
   function client() { return window.TempoSupabase?.getClient?.(); }
 
@@ -46,6 +49,7 @@
     const breaks = {};
     const shifts = {};
     const members = {};
+    const payments = {};
 
     state.jobs.filter((job) => isUuid(job.id)).forEach((job) => {
       jobs[job.id] = { id: job.id, workspace_id: workspaceId, name: job.name, color: job.color || 'indigo', is_general: Boolean(job.general), deleted_at: job.deletedAt || null };
@@ -91,7 +95,11 @@
       members[person.id] = { default_rate_cents: cents(person.defaultRate) };
     });
 
-    return { jobs, rates, entries, breaks, shifts, members };
+    (state.payments || []).filter((payment) => isUuid(payment.personId) && /^\d{4}-\d{2}-\d{2}$/.test(payment.weekStart || '')).forEach((payment) => {
+      payments[`${payment.personId}:${payment.weekStart}`] = { workspace_id: workspaceId, person_id: payment.personId, week_start: payment.weekStart, amount_paid_cents: cents(payment.amountPaid) };
+    });
+
+    return { jobs, rates, entries, breaks, shifts, members, payments };
   }
 
   function snapshotOf(rows) {
@@ -172,10 +180,14 @@
     const memberIds = memberRows.map((item) => item.user_id);
     const entryIds = entryRows.map((entry) => entry.id);
     const isOwner = memberRows.some((member) => member.user_id === currentUser.id && member.role === 'owner');
-    const [profileRows, breakRows, inviteRows] = await Promise.all([
+    const [profileRows, breakRows, inviteRows, paymentRows] = await Promise.all([
       memberIds.length ? supabaseClient.from('profiles').select('id, display_name, initials').in('id', memberIds).then(check) : [],
       entryIds.length ? supabaseClient.from('breaks').select('*').in('time_entry_id', entryIds).then(check) : [],
       isOwner ? supabaseClient.from('workspace_invites').select('id, email, default_rate_cents, created_at').eq('workspace_id', workspaceId).is('accepted_at', null).order('created_at').then(check) : [],
+      supabaseClient.from('week_payments').select('person_id, week_start, amount_paid_cents').eq('workspace_id', workspaceId).then((result) => {
+        paymentsAvailable = !isMissingTable(result.error);
+        return paymentsAvailable ? check(result) : [];
+      }),
     ]);
 
     const profiles = new Map((profileRows || []).map((item) => [item.id, item]));
@@ -192,11 +204,14 @@
     const shifts = shiftRows.map((shift) => ({ id: shift.id, personId: shift.person_id || 'general', jobId: shift.job_id, start: shift.start_at, end: shift.end_at, note: shift.note || '', deletedAt: shift.deleted_at }));
     const jobNames = new Map(jobRows.map((job) => [job.id, job.name]));
     const audit = auditRows.map((item) => ({ id: item.id, action: item.action[0].toUpperCase() + item.action.slice(1), detail: auditDetail(item, jobNames), actorId: item.actor_id || currentUser.id, at: item.created_at }));
+    const previous = window.TempoApp.getState();
+    const payments = !paymentsAvailable ? (previous.payments || []) : (paymentRows || []).map((row) => ({ personId: row.person_id, weekStart: row.week_start, amountPaid: Number(row.amount_paid_cents || 0) / 100 }));
     const invites = (inviteRows || []).map((invite) => ({ id: invite.id, email: invite.email, defaultRate: Number(invite.default_rate_cents || 0) / 100, createdAt: invite.created_at }));
 
-    const previous = window.TempoApp.getState();
-    const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, sync: previous.sync || {} };
+    const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, payments, sync: previous.sync || {} };
     nextState.sync.snapshot = snapshotOf(rowsFromState(nextState));
+    // Payments kept locally while the table is missing stay "unsynced" so they upload once it exists.
+    if (!paymentsAvailable) nextState.sync.snapshot.payments = {};
     nextState.sync.workspaceId = workspaceId;
     nextState.sync.pendingMutations = [];
     window.TempoApp.replaceState(nextState);
@@ -238,10 +253,17 @@
     if (breaks.length) check(await supabaseClient.from('breaks').upsert(breaks.map(([, row]) => row)));
     const shifts = changed(rows, snapshot, 'shifts');
     if (shifts.length) check(await supabaseClient.from('planned_shifts').upsert(shifts.map(([, row]) => row)));
+    const payments = paymentsAvailable ? changed(rows, snapshot, 'payments') : [];
+    if (payments.length) {
+      const result = await supabaseClient.from('week_payments').upsert(payments.map(([, row]) => row));
+      if (isMissingTable(result.error)) paymentsAvailable = false;
+      else check(result);
+    }
 
     const latest = window.TempoApp.getState();
     latest.sync.snapshot = snapshotOf(rows);
     if (!isOwner) latest.sync.snapshot.members = snapshot.members;
+    if (!paymentsAvailable) latest.sync.snapshot.payments = snapshot.payments;
     latest.sync.lastSyncedAt = new Date().toISOString();
     latest.sync.pendingMutations = [];
     window.TempoStore.save(latest);
@@ -264,7 +286,7 @@
     const supabaseClient = client();
     if (channel) supabaseClient.removeChannel(channel);
     channel = supabaseClient.channel(`workspace-${workspaceId}`);
-    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members'].forEach((table) => {
+    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members', 'week_payments'].forEach((table) => {
       channel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `workspace_id=eq.${workspaceId}` }, scheduleRefresh);
     });
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'breaks' }, scheduleRefresh);
@@ -347,5 +369,5 @@
 
   window.addEventListener('online', () => scheduleRefresh());
 
-  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, reset, isConnected: () => Boolean(workspaceId), getWorkspaceId: () => workspaceId };
+  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, reset, isConnected: () => Boolean(workspaceId), paymentsAvailable: () => paymentsAvailable, getWorkspaceId: () => workspaceId };
 })();
