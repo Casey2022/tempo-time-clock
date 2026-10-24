@@ -178,6 +178,7 @@
       if (event === 'SIGNED_OUT') {
         authenticatedUserId = null;
         recoveryMode = false;
+        window.TempoApp?.setSyncStatus?.('offline');
         setRecoveryMode(false);
         showGate();
         return;

@@ -151,6 +151,9 @@ function loadState() {
   const saved = TempoStore.load(initialState());
   saved.removedPeople = Array.isArray(saved.removedPeople) ? saved.removedPeople : [];
   saved.payments = Array.isArray(saved.payments) ? saved.payments : [];
+  // The saved status belongs to the last session; it's only "connected" again once this one syncs.
+  saved.sync.status = 'offline';
+  saved.sync.statusDetail = '';
   return saved;
 }
 
