@@ -111,7 +111,13 @@
                 <div class="metric-label">Gross pay this week</div>
                 <div class="metric-foot metric-foot-bottom"><span class="muted">Based on rounded hours</span><span class="tiny-arrow">→</span></div>
               </article>
-              <article class="metric-card">
+              <article class="metric-card unpaid-card" id="unpaid-card" role="button" tabindex="0" aria-label="Unpaid balance: open the oldest unpaid week">
+                <div class="card-topline"><span>Unpaid balance</span><span class="metric-icon orange-icon" id="unpaid-icon">!</span></div>
+                <div class="metric-value" id="unpaid-total">$0.00</div>
+                <div class="metric-label">Remaining from all weeks</div>
+                <div class="metric-foot metric-foot-bottom"><span class="muted" id="unpaid-detail">All caught up</span><span class="tiny-arrow">→</span></div>
+              </article>
+              <article class="metric-card active-card">
                 <div class="card-topline"><span>Active now</span><span class="metric-icon purple-icon">◷</span></div>
                 <div class="metric-value" id="active-count">0</div>
                 <div class="metric-label">Open clocks</div>

@@ -282,6 +282,37 @@ function paymentStatus({ earned, paid, balance }) {
   return { tone: 'due', label: `${formatMoney(balance)} unpaid` };
 }
 
+// Sums what is still owed, week by week and person by person. An overpaid week
+// doesn't cancel out another week's balance.
+function unpaidSummary() {
+  const weeks = new Set();
+  state.entries.filter((entry) => !entry.deletedAt).forEach((entry) => weeks.add(mondayKey(dateFromKey(entryDateKey(entry)))));
+  (state.payments || []).forEach((payment) => weeks.add(payment.weekStart));
+  const owing = [];
+  let total = 0;
+  [...weeks].sort().forEach((weekStart) => {
+    const ids = new Set([...weekEntries(weekStart).map((entry) => entry.personId), ...(state.payments || []).filter((payment) => payment.weekStart === weekStart).map((payment) => payment.personId)]);
+    const balance = roundCents([...ids].reduce((sum, id) => sum + Math.max(0, personWeekTotals(id, weekStart).balance), 0));
+    if (balance > 0) { owing.push(weekStart); total += balance; }
+  });
+  return { total: roundCents(total), weeks: owing };
+}
+
+function renderUnpaidCard() {
+  const { total, weeks } = unpaidSummary();
+  $('#unpaid-total').textContent = formatMoney(total);
+  $('#unpaid-detail').textContent = weeks.length ? `${weeks.length} week${weeks.length === 1 ? '' : 's'} · oldest ${formatDate(weeks[0])}` : 'All caught up';
+  $('#unpaid-icon').textContent = weeks.length ? '!' : '✓';
+  $('#unpaid-icon').className = `metric-icon ${weeks.length ? 'orange-icon' : 'green-icon'}`;
+  $('#unpaid-card').dataset.week = weeks[0] || '';
+  $('#unpaid-card').setAttribute('aria-label', weeks.length ? `Unpaid balance ${formatMoney(total)}: open the week of ${formatDate(weeks[0])}` : 'Unpaid balance: all caught up');
+}
+
+function openOldestUnpaidWeek() {
+  showWeek($('#unpaid-card').dataset.week || mondayKey());
+  navigate('week');
+}
+
 function setWeekPayment(personId, weekStart, amount) {
   const value = roundCents(Math.max(0, amount));
   const existing = paymentFor(personId, weekStart);
@@ -358,6 +389,7 @@ function renderOverview() {
   $('#active-description').textContent = activeEntries().length ? `${activeEntries().length} clock${activeEntries().length === 1 ? '' : 's'} running` : 'Nothing running';
   $('#week-progress').style.width = `${progress}%`;
   $('#week-target-label').textContent = `${Math.round(progress)}% of 40h target`;
+  renderUnpaidCard();
 
   renderQuickClock();
   const activeContainer = $('#active-clocks');
@@ -929,6 +961,8 @@ function bindEvents() {
   $('#invite-form').addEventListener('submit', handleInviteSubmit);
   $('#sync-card').addEventListener('click', () => { if (state.sync?.status === 'attention') window.TempoCloud?.refresh?.(); });
   $('#recent-entries').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); });
+  $('#unpaid-card').addEventListener('click', openOldestUnpaidWeek);
+  $('#unpaid-card').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openOldestUnpaidWeek(); } });
   $('#week-payments').addEventListener('change', (event) => {
     const input = event.target.closest('[data-payment-person]');
     if (!input) return;
