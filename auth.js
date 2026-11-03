@@ -4,6 +4,8 @@
   let recoveryMode = false;
   let authenticatedUserId = null;
 
+  const signInOption = (name) => Boolean(window.TEMPO_CONFIG?.signInOptions?.[name]);
+  const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   const isLocal = () => ['localhost', '127.0.0.1'].includes(window.location.hostname);
   const $ = (selector) => document.querySelector(selector);
 
@@ -31,6 +33,7 @@
     $('#auth-reset').disabled = busy;
     $('#auth-signup').disabled = busy;
     $('#auth-google').disabled = busy;
+    $('#auth-magic').disabled = busy;
     $('#auth-passkey').disabled = busy;
   }
 
@@ -47,8 +50,9 @@
     $('#auth-submit').textContent = enabled ? 'Save new password' : 'Sign in';
     $('#auth-reset').classList.toggle('hidden', enabled);
     $('#auth-signup').classList.toggle('hidden', enabled);
-    $('#auth-google').classList.toggle('hidden', enabled);
-    $('#auth-passkey').classList.toggle('hidden', enabled);
+    $('#auth-magic').classList.toggle('hidden', enabled);
+    $('#auth-google').classList.toggle('hidden', enabled || !signInOption('google'));
+    $('#auth-passkey').classList.toggle('hidden', enabled || !signInOption('passkey'));
   }
 
   async function finishSession(session) {
@@ -113,17 +117,35 @@
   async function signUp() {
     const client = window.TempoSupabase?.getClient();
     if (!client) return setMessage('The secure connection is not available yet.', true);
+    const email = $('#auth-email').value.trim();
+    const password = $('#auth-password').value;
+    // Without these, Supabase treats the request as an anonymous sign-in and rejects it.
+    if (!validEmail(email)) { $('#auth-email').focus(); return setMessage('Enter your email address first, then choose a password of at least 8 characters.', true); }
+    if (password.length < 8) { $('#auth-password').focus(); return setMessage('Choose a password of at least 8 characters, then tap Create account.', true); }
     setBusy(true);
     setMessage('Creating your account…');
     const { data, error } = await client.auth.signUp({
-      email: $('#auth-email').value.trim(),
-      password: $('#auth-password').value,
+      email,
+      password,
       options: { emailRedirectTo: window.location.origin },
     });
     setBusy(false);
     if (error) return setMessage(error.message, true);
     if (data.session) return finishSession(data.session);
     setMessage('Check your email to confirm the account, then sign in.');
+  }
+
+  async function sendMagicLink() {
+    const client = window.TempoSupabase?.getClient();
+    const email = $('#auth-email').value.trim();
+    if (!client) return setMessage('The secure connection is not available yet.', true);
+    if (!validEmail(email)) { $('#auth-email').focus(); return setMessage('Enter your email address, then tap “Email me a sign-in link”.', true); }
+    setBusy(true);
+    setMessage('Sending a sign-in link…');
+    const { error } = await client.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: window.location.origin } });
+    setBusy(false);
+    if (error) return setMessage(/rate limit/i.test(error.message) ? 'Too many emails were sent recently. Wait a few minutes and try again.' : error.message, true);
+    setMessage(`Check ${email} for a sign-in link from Tempo. It can take a minute, and may land in spam.`);
   }
 
   async function signInWithGoogle() {
@@ -157,9 +179,12 @@
     $('#auth-reset').addEventListener('click', resetPassword);
     $('#auth-signup').addEventListener('click', signUp);
     $('#auth-google').addEventListener('click', signInWithGoogle);
+    $('#auth-magic').addEventListener('click', sendMagicLink);
     $('#auth-passkey').addEventListener('click', signInWithPasskey);
     $('#auth-demo').addEventListener('click', enableLocalDemo);
     $('#auth-demo').classList.toggle('hidden', !isLocal());
+    $('#auth-google').classList.toggle('hidden', !signInOption('google'));
+    $('#auth-passkey').classList.toggle('hidden', !signInOption('passkey'));
     if (window.location.hash.includes('type=recovery')) setRecoveryMode(true);
 
     const client = window.TempoSupabase?.getClient();

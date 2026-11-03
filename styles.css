@@ -36,10 +36,11 @@ button { cursor: pointer; }
 .auth-card h1 { margin: 4px 0 8px; font-size: clamp(1.8rem, 5vw, 2.5rem); letter-spacing: -.04em; }
 .auth-form { display: grid; gap: 16px; margin-top: 24px; }
 .auth-submit { width: 100%; justify-content: center; }
-.auth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-.auth-actions .button { justify-content: center; min-height: 46px; padding: 10px 12px; }
+.auth-actions { display: flex; gap: 10px; margin-top: 10px; }
+.auth-actions .button { flex: 1; justify-content: center; min-height: 46px; padding: 10px 12px; }
 .auth-passkey { display: block; margin: 18px auto 0; }
 .auth-reset { display: block; margin: 12px auto 0; color: var(--ink-soft); font-weight: 600; }
+.auth-magic { width: 100%; justify-content: center; min-height: 46px; margin-top: 12px; }
 .auth-message { min-height: 20px; margin: 16px 0 0; color: var(--ink-soft); font-size: 0.9rem; line-height: 1.4; text-align: center; }
 .auth-message.error { color: #b63d4e; }
 .app-shell { min-height: 100vh; display: flex; }
@@ -387,7 +388,7 @@ button { cursor: pointer; }
 }
 @media (max-width: 700px) {
   .auth-card { padding: 24px; }
-  .auth-actions { grid-template-columns: 1fr; }
+  .auth-actions { flex-direction: column; }
   .sidebar { position: fixed; left: -270px; z-index: 30; width: 246px; background: var(--surface); border-right-color: var(--line-strong); box-shadow: 12px 0 35px rgba(24,28,45,.18); transition: left .2s ease; }.sidebar.open { left: 0; }
   .mobile-menu { display: grid; }.topbar { height: 65px; padding-inline: 16px; }.topbar-actions { gap: 9px; }.connection-pill { display: none; }.page-content { padding: 30px 16px 60px; }.welcome-row, .section-heading-row { align-items: flex-start; flex-direction: column; gap: 18px; margin-bottom: 23px; }.welcome-row .button, .section-heading-row .button { width: 100%; }.section-heading-row h1 { font-size: 27px; }
   .metric-grid { grid-template-columns: 1fr 1fr; gap: 10px; }.featured-card { grid-column: span 2; }.metric-card { padding: 17px; min-height: 145px; }.metric-value { font-size: 25px; }.metric-foot-bottom { margin-top: 18px; }
