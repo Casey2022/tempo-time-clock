@@ -131,6 +131,7 @@
                 <div class="panel-header"><div><p class="eyebrow">Live tracking</p><h2>General work</h2></div><span class="quick-clock-state" id="quick-clock-state">Ready</span></div>
                 <div id="quick-clock" aria-live="polite"></div>
                 <button class="button secondary-button add-time-button" id="add-entry-button" type="button"><span class="button-plus">+</span> Add time manually</button>
+                <div id="live-photos" class="live-photos hidden"></div>
                 <div id="active-clocks" class="active-clock-list hidden"></div>
               </section>
               <section class="panel week-panel">
@@ -185,6 +186,7 @@
           <div class="entry-mode-fields hidden" data-mode-fields="duration"><div class="form-grid two-col"><label class="field"><span>Date</span><input type="date" id="entry-date" /></label><label class="field"><span>Duration</span><input type="number" id="entry-duration" min="0" step="0.01" placeholder="e.g. 4.5" /><small>Hours before rounding</small></label></div></div>
           <div class="entry-form-note">Breaks are optional and tracked separately. Start or add a break only when one actually happens.</div>
           <div class="form-grid two-col"><label class="field"><span>Rate override <em>optional</em></span><div class="input-prefix"><span>$</span><input type="number" id="entry-rate" min="0" step="0.01" placeholder="Use default" /></div></label><label class="field"><span>Notes <em>optional</em></span><input type="text" id="entry-note" placeholder="What was this for?" /></label></div>
+          <div id="entry-photos" class="modal-photos"></div>
           <div class="modal-footer"><button type="button" class="button danger-button hidden" id="entry-delete-button">Delete entry</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="entry-modal">Cancel</button><button type="submit" class="button primary-button" id="entry-submit">Start clock</button></div>
         </form>
       </section>
@@ -193,7 +195,7 @@
     <div class="modal-backdrop" id="shift-modal" aria-hidden="true">
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="shift-modal-title">
         <div class="modal-header"><div><p class="eyebrow">Plan ahead</p><h2 id="shift-modal-title">Add planned shift</h2></div><button class="icon-button close-modal" data-close="shift-modal" aria-label="Close">×</button></div>
-        <form id="shift-form"><input type="hidden" id="shift-id" value="" /><div class="form-grid two-col"><label class="field"><span>Job</span><select id="shift-job" required></select></label><label class="field"><span>Person</span><select id="shift-person" required></select></label></div><div class="form-grid two-col"><label class="field"><span>Start</span><input type="datetime-local" id="shift-start" required /></label><label class="field"><span>End</span><input type="datetime-local" id="shift-end" required /></label></div><label class="field"><span>Notes <em>optional</em></span><input type="text" id="shift-note" placeholder="What is planned?" /></label><div class="modal-footer"><button type="button" class="button danger-button hidden" id="shift-delete-button">Delete shift</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="shift-modal">Cancel</button><button type="submit" class="button primary-button" id="shift-submit">Add shift</button></div></form>
+        <form id="shift-form"><input type="hidden" id="shift-id" value="" /><div class="form-grid two-col"><label class="field"><span>Job</span><select id="shift-job" required></select></label><label class="field"><span>Person</span><select id="shift-person" required></select></label></div><div class="form-grid two-col"><label class="field"><span>Start</span><input type="datetime-local" id="shift-start" required /></label><label class="field"><span>End</span><input type="datetime-local" id="shift-end" required /></label></div><label class="field"><span>Notes <em>optional</em></span><input type="text" id="shift-note" placeholder="What is planned?" /></label><div id="shift-photos" class="modal-photos"></div><div class="modal-footer"><button type="button" class="button danger-button hidden" id="shift-delete-button">Delete shift</button><span class="modal-footer-spacer"></span><button type="button" class="button secondary-button close-modal" data-close="shift-modal">Cancel</button><button type="submit" class="button primary-button" id="shift-submit">Add shift</button></div></form>
       </section>
     </div>
 
@@ -238,7 +240,16 @@
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="entry-detail-title">
         <div class="modal-header"><div><p class="eyebrow" id="entry-detail-eyebrow">Time entry</p><h2 id="entry-detail-title">Entry</h2></div><button class="icon-button close-modal" data-close="entry-detail-modal" aria-label="Close">×</button></div>
         <div id="entry-detail-body"></div>
+        <div id="entry-detail-photos" class="modal-photos"></div>
         <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="entry-detail-modal">Close</button></div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="photo-viewer" aria-hidden="true">
+      <section class="modal photo-modal" role="dialog" aria-modal="true" aria-labelledby="photo-viewer-title">
+        <div class="modal-header"><div><p class="eyebrow" id="photo-viewer-meta"></p><h2 id="photo-viewer-title">Photo</h2></div><button class="icon-button close-modal" data-close="photo-viewer" aria-label="Close">×</button></div>
+        <img id="photo-viewer-image" class="photo-viewer-image" alt="" />
+        <div class="modal-footer"><button type="button" class="button danger-button hidden" id="photo-viewer-delete">Delete photo</button><span class="modal-footer-spacer"></span><a class="button secondary-button" id="photo-viewer-open" href="#" target="_blank" rel="noopener">Open full size</a><button type="button" class="button primary-button close-modal" data-close="photo-viewer">Close</button></div>
       </section>
     </div>
 
@@ -287,6 +298,7 @@
     <script src="supabase-client.js"></script>
     <script src="auth.js"></script>
     <script src="cloud-sync.js"></script>
+    <script src="photos.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

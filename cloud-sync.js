@@ -8,6 +8,10 @@
   // False until 0004_payments_ledger.sql has been run, so the rest of sync keeps working without it.
   let paymentsAvailable = true;
   const PAYMENT_METHODS = ['venmo', 'cash', 'check', 'bank', 'other'];
+  // False until 0005_photos.sql has been run; the app hides photo buttons until then.
+  let photosAvailable = true;
+  const PHOTO_BUCKET = 'tempo-photos';
+  const signedUrlCache = new Map(); // storage path → { url, expires }
 
   const isUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const newId = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`);
@@ -183,7 +187,7 @@
     const memberIds = memberRows.map((item) => item.user_id);
     const entryIds = entryRows.map((entry) => entry.id);
     const isOwner = memberRows.some((member) => member.user_id === currentUser.id && member.role === 'owner');
-    const [profileRows, breakRows, inviteRows, paymentRows] = await Promise.all([
+    const [profileRows, breakRows, inviteRows, paymentRows, attachmentRows] = await Promise.all([
       memberIds.length ? supabaseClient.from('profiles').select('*').in('id', memberIds).then(check) : [],
       entryIds.length ? supabaseClient.from('breaks').select('*').in('time_entry_id', entryIds).then(check) : [],
       isOwner ? supabaseClient.from('workspace_invites').select('id, email, role, default_rate_cents, created_at').eq('workspace_id', workspaceId).is('accepted_at', null).order('created_at').then(check) : [],
@@ -196,6 +200,10 @@
           const paidOn = new Date(`${row.week_start}T12:00:00Z`); paidOn.setUTCDate(paidOn.getUTCDate() + 6);
           return { id: `legacy-${row.person_id}-${row.week_start}`, person_id: row.person_id, amount_cents: row.amount_paid_cents, paid_on: paidOn.toISOString().slice(0, 10), method: 'other', note: `Recorded for week of ${row.week_start}`, legacy: true };
         });
+      }),
+      supabaseClient.from('attachments').select('id, entry_id, shift_id, storage_path, caption, width, height, created_by, created_at').eq('workspace_id', workspaceId).is('deleted_at', null).order('created_at').then((result) => {
+        photosAvailable = !isMissingTable(result.error);
+        return photosAvailable ? check(result) : [];
       }),
     ]);
 
@@ -220,7 +228,8 @@
     const payments = paymentsAvailable ? pulledPayments : [...pulledPayments, ...(previous.payments || []).filter((payment) => isUuid(payment.id))];
     const invites = (inviteRows || []).map((invite) => ({ id: invite.id, email: invite.email, role: ROLE_LABELS[invite.role] || 'Member', defaultRate: Number(invite.default_rate_cents || 0) / 100, createdAt: invite.created_at }));
 
-    const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, payments, sync: previous.sync || {} };
+    const attachments = (attachmentRows || []).map((row) => ({ id: row.id, entryId: row.entry_id, shiftId: row.shift_id, path: row.storage_path, caption: row.caption || '', width: row.width, height: row.height, createdBy: row.created_by, createdAt: row.created_at }));
+    const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, payments, attachments, sync: previous.sync || {} };
     nextState.sync.snapshot = snapshotOf(rowsFromState(nextState));
     // Payments kept locally while the table is missing stay "unsynced" so they upload once it exists.
     if (!paymentsAvailable) nextState.sync.snapshot.payments = {};
@@ -301,7 +310,7 @@
     const supabaseClient = client();
     if (channel) supabaseClient.removeChannel(channel);
     channel = supabaseClient.channel(`workspace-${workspaceId}`);
-    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members', 'payments'].forEach((table) => {
+    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members', 'payments', 'attachments'].forEach((table) => {
       channel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `workspace_id=eq.${workspaceId}` }, scheduleRefresh);
     });
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'breaks' }, scheduleRefresh);
@@ -380,6 +389,49 @@
     await refresh();
   }
 
+  // Uploads one (already resized) photo and links it to a time entry or a planned shift.
+  async function uploadPhoto({ entryId = null, shiftId = null, blob, width, height, caption = '' }) {
+    const supabaseClient = client();
+    if (!supabaseClient || !workspaceId) throw new Error('Photos need a connection to the cloud workspace.');
+    if (!photosAvailable) throw new Error('Photos aren\'t set up yet. Run 0005_photos.sql in Supabase first.');
+    // A clock that was just started may not have reached the database yet.
+    await exclusive(push);
+    const id = newId();
+    const path = `${workspaceId}/${id}.jpg`;
+    const upload = await supabaseClient.storage.from(PHOTO_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+    if (upload.error) throw new Error(upload.error.message || 'The photo could not be uploaded.');
+    const row = { id, workspace_id: workspaceId, entry_id: entryId, shift_id: shiftId, storage_path: path, caption: caption || null, width, height, size_bytes: blob.size };
+    const inserted = await supabaseClient.from('attachments').insert(row);
+    if (inserted.error) {
+      await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);
+      throw new Error(inserted.error.message || 'The photo could not be saved.');
+    }
+    await refresh();
+    return id;
+  }
+
+  async function deletePhoto(attachment) {
+    const supabaseClient = client();
+    if (!supabaseClient || !workspaceId) throw new Error('Connect to the cloud workspace first.');
+    check(await supabaseClient.from('attachments').update({ deleted_at: new Date().toISOString() }).eq('id', attachment.id));
+    // The record is what the app shows; removing the file too frees storage.
+    await supabaseClient.storage.from(PHOTO_BUCKET).remove([attachment.path]);
+    signedUrlCache.delete(attachment.path);
+    await refresh();
+  }
+
+  // Private files are viewed through short-lived signed links, cached until near expiry.
+  async function photoUrls(paths) {
+    const supabaseClient = client();
+    const now = Date.now();
+    const missing = paths.filter((path) => !(signedUrlCache.get(path)?.expires > now + 60000));
+    if (missing.length && supabaseClient) {
+      const { data, error } = await supabaseClient.storage.from(PHOTO_BUCKET).createSignedUrls(missing, 3600);
+      if (!error) (data || []).forEach((item) => { if (item.signedUrl) signedUrlCache.set(item.path, { url: item.signedUrl, expires: now + 3600 * 1000 }); });
+    }
+    return new Map(paths.map((path) => [path, signedUrlCache.get(path)?.url || null]));
+  }
+
   async function cancelInvite(inviteId) {
     const supabaseClient = client();
     if (!supabaseClient || !workspaceId) throw new Error('Connect to the cloud workspace first.');
@@ -396,5 +448,5 @@
 
   window.addEventListener('online', () => scheduleRefresh());
 
-  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, updateProfile, reset, isConnected: () => Boolean(workspaceId), paymentsAvailable: () => paymentsAvailable, getWorkspaceId: () => workspaceId };
+  window.TempoCloud = { hydrate, scheduleSync, syncNow, refresh, inviteMember, cancelInvite, updateProfile, reset, isConnected: () => Boolean(workspaceId), paymentsAvailable: () => paymentsAvailable, photosAvailable: () => photosAvailable && Boolean(workspaceId), uploadPhoto, deletePhoto, photoUrls, getWorkspaceId: () => workspaceId };
 })();

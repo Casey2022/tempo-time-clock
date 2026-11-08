@@ -396,6 +396,28 @@ button { cursor: pointer; }
 .detail-breaks ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
 .role-payer .table-actions { opacity: 1; }
 
+/* Photos */
+.modal-photos:not(:empty) { margin: 4px 0 14px; }
+#entry-detail-photos:not(:empty) { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.photo-strip-title { margin-bottom: 8px; color: var(--ink-soft); font-size: 11px; font-weight: 750; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 8px; }
+.photo-thumb, .photo-add { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; }
+.photo-thumb { padding: 0; border: 1px solid var(--line); background: var(--surface-soft); cursor: zoom-in; }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-thumb img:not([src]) { visibility: hidden; }
+.photo-add { display: grid; place-content: center; justify-items: center; gap: 2px; border: 1.5px dashed var(--line-strong); color: var(--indigo); font-size: 11px; font-weight: 700; cursor: pointer; background: var(--surface); }
+.photo-add:hover { border-color: var(--indigo); background: var(--indigo-soft); }
+.photo-add input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.photo-add-icon { font-size: 20px; line-height: 1; }
+.photo-add.busy { opacity: .55; pointer-events: none; }
+.photo-add.busy span:last-child::after { content: '…'; }
+.live-photos { margin-top: 12px; }
+.live-photos .photo-grid { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+.photo-badge { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--surface-soft); color: var(--ink-soft); font-size: 10px; font-weight: 650; white-space: nowrap; }
+.photo-modal { width: min(900px, 100%); }
+.photo-viewer-image { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: 12px; background: #0f1222; }
+.photo-note { margin: 4px 0 12px; }
+
 /* Payments ledger */
 .payment-row { grid-template-columns: 34px minmax(120px, 1fr) 110px 150px; }
 .payment-applied { text-align: right; }

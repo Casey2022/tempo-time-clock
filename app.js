@@ -151,6 +151,7 @@ function loadState() {
   const saved = TempoStore.load(initialState());
   saved.removedPeople = Array.isArray(saved.removedPeople) ? saved.removedPeople : [];
   // Older versions stored one amount per week; those now live in the payments table.
+  saved.attachments = Array.isArray(saved.attachments) ? saved.attachments : [];
   saved.payments = Array.isArray(saved.payments) ? saved.payments.filter((payment) => payment.id && payment.amount !== undefined) : [];
   // The saved status belongs to the last session; it's only "connected" again once this one syncs.
   saved.sync.status = 'offline';
@@ -441,6 +442,7 @@ function renderOverview() {
 
   renderQuickClock();
   if (canEditTime()) renderTopClock();
+  renderLivePhotos(canEditTime() ? quickClockEntry() : null);
   const activeContainer = $('#active-clocks');
   const quickJob = generalWorkJob();
   const active = !canEditTime() ? [] : activeEntries().filter((entry) => !(quickJob && entry.personId === state.currentUserId && entry.jobId === quickJob.id)).sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -513,13 +515,13 @@ function renderActiveClock(entry) {
 function renderRecentEntry(entry) {
   const date = entryDateKey(entry);
   const open = `<button type="button" class="entry-row entry-row-button" data-edit-entry="${entry.id}" aria-label="${canEditTime() ? 'Edit' : 'View'} ${escapeHtml(jobName(entry.jobId))} entry">`;
-  return `${open}<div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div></button>`;
+  return `${open}<div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}${photoBadge({ entryId: entry.id })}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div></button>`;
 }
 
 function renderShift(shift) {
   const date = entryDateKey({ mode: 'range', start: shift.start });
   const general = shift.personId === 'general';
-  return `<div class="shift-row ${general ? 'general' : ''}"><span class="shift-bar"></span><div class="shift-details"><div class="shift-title">${escapeHtml(jobName(shift.jobId))}</div><div class="shift-subtitle">${general ? 'General' : escapeHtml(personName(shift.personId))}${shift.note ? ` · ${escapeHtml(shift.note)}` : ''}</div></div><div><div class="shift-date ${general ? 'general' : ''}">${formatDate(date, { weekday: 'short', month: 'short', day: 'numeric' })}</div><div class="shift-time">${formatTime(shift.start)} – ${formatTime(shift.end)}</div></div><div class="row-actions"><button data-edit-shift="${shift.id}" aria-label="Edit planned shift">✎</button><button data-delete-shift="${shift.id}" aria-label="Delete planned shift">×</button></div></div>`;
+  return `<div class="shift-row ${general ? 'general' : ''}"><span class="shift-bar"></span><div class="shift-details"><div class="shift-title">${escapeHtml(jobName(shift.jobId))}${photoBadge({ shiftId: shift.id })}</div><div class="shift-subtitle">${general ? 'General' : escapeHtml(personName(shift.personId))}${shift.note ? ` · ${escapeHtml(shift.note)}` : ''}</div></div><div><div class="shift-date ${general ? 'general' : ''}">${formatDate(date, { weekday: 'short', month: 'short', day: 'numeric' })}</div><div class="shift-time">${formatTime(shift.start)} – ${formatTime(shift.end)}</div></div><div class="row-actions"><button data-edit-shift="${shift.id}" aria-label="Edit planned shift">✎</button><button data-delete-shift="${shift.id}" aria-label="Delete planned shift">×</button></div></div>`;
 }
 
 function renderWeek() {
@@ -644,7 +646,7 @@ function renderTableEntry(entry) {
   const range = entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'Active'}`;
   const breakAction = entry.mode === 'duration' ? '' : `<button data-add-break-entry="${entry.id}">Break</button>`;
   const actions = canEditTime() ? `<div class="table-actions">${breakAction}<button data-edit-entry="${entry.id}">Edit</button><button data-delete-entry="${entry.id}">Delete</button></div>` : `<div class="table-actions"><button data-view-entry="${entry.id}">View</button></div>`;
-  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div><div class="entry-subtitle entry-range-mobile">${range}${(entry.breaks || []).length ? ` · ${entry.breaks.length} break${entry.breaks.length === 1 ? '' : 's'}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div>${actions}</div></div>`;
+  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}${photoBadge({ entryId: entry.id })}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div><div class="entry-subtitle entry-range-mobile">${range}${(entry.breaks || []).length ? ` · ${entry.breaks.length} break${entry.breaks.length === 1 ? '' : 's'}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div>${actions}</div></div>`;
 }
 
 function colorForJob(jobId) {
@@ -854,6 +856,7 @@ function openEntryModal(mode = 'timer', entryId = null) {
     $('#entry-submit').textContent = 'Save changes';
     $('#entry-delete-button').classList.remove('hidden');
   }
+  mountPhotos('#entry-photos', entryId ? { entryId } : null);
   openModal('entry-modal');
 }
 
@@ -871,6 +874,7 @@ function openEntryDetail(entryId) {
   $('#entry-detail-title').textContent = jobName(entry.jobId);
   $('#entry-detail-eyebrow').textContent = entry.end || entry.mode === 'duration' ? 'Time entry' : 'Running now';
   $('#entry-detail-body').innerHTML = `<dl class="detail-list">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${breaks ? `<div class="detail-breaks"><strong>Breaks</strong><ul>${breaks}</ul></div>` : ''}`;
+  mountPhotos('#entry-detail-photos', { entryId: entry.id });
   openModal('entry-detail-modal');
 }
 
@@ -910,6 +914,7 @@ function openShiftModal(shiftId = null) {
     $('#shift-note').value = shift.note || '';
     $('#shift-delete-button').classList.remove('hidden');
   }
+  mountPhotos('#shift-photos', shiftId ? { shiftId } : null);
   openModal('shift-modal');
 }
 
@@ -1161,7 +1166,7 @@ function bindEvents() {
   $('#top-clock-button').addEventListener('click', toggleTopClock);
   $('#quick-clock').addEventListener('click', (event) => { if (event.target.closest('#quick-clock-in')) startGeneralClock(); if (event.target.closest('#quick-clock-out')) { const entry = quickClockEntry(); if (entry) stopClock(entry.id); } });
   $('#week-add-button').addEventListener('click', () => openEntryModal('range'));
-  $('#add-shift-button').addEventListener('click', openShiftModal);
+  $('#add-shift-button').addEventListener('click', () => openShiftModal());
   $('#add-job-button').addEventListener('click', () => openJobModal());
   $('#job-form').addEventListener('submit', handleJobSubmit);
   $('#job-modal-delete').addEventListener('click', () => { const id = $('#job-modal-id').value; if (id) deleteJob(id); });
@@ -1170,6 +1175,7 @@ function bindEvents() {
   $('#profile-form').addEventListener('submit', handleProfileSubmit);
   $('#sync-card').addEventListener('click', () => { if (state.sync?.status === 'attention') window.TempoCloud?.refresh?.(); });
   $('#recent-entries').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); });
+  bindPhotoEvents();
   $('#unpaid-card').addEventListener('click', () => openPaymentModal());
   $('#unpaid-card').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPaymentModal(); } });
   $('#record-payment-button').addEventListener('click', () => openPaymentModal());
@@ -1215,7 +1221,7 @@ setInterval(() => { renderOverview(); if (activeView === 'week') renderWeek(); }
 
 window.TempoApp = {
   getState: () => state,
-  replaceState: (nextState) => { state = { ...nextState, removedPeople: nextState.removedPeople || state.removedPeople || [], invites: nextState.invites || [], payments: nextState.payments || [] }; TempoStore.save(state); renderAll(); },
+  replaceState: (nextState) => { state = { ...nextState, removedPeople: nextState.removedPeople || state.removedPeople || [], invites: nextState.invites || [], payments: nextState.payments || [], attachments: nextState.attachments || [] }; TempoStore.save(state); renderAll(); remountPhotos(); },
   setLocalDemoMode: () => { renderAll(); },
   setSyncStatus,
   showToast,
@@ -1223,4 +1229,4 @@ window.TempoApp = {
 
 window.TempoAuth?.start({ onAuthenticated: (session) => window.TempoCloud?.hydrate?.(session) });
 
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=13').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=14').catch(() => {}));

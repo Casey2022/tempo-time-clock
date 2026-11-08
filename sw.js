@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tempo-shell-v13';
+const CACHE_NAME = 'tempo-shell-v14';
 const APP_SHELL = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const APP_SHELL = [
   './supabase-client.js',
   './auth.js',
   './cloud-sync.js',
+  './photos.js',
   './app.js',
   './manifest.webmanifest',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.105.0',
