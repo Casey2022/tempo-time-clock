@@ -95,7 +95,7 @@
                 <h1>Good morning, Casey <span class="wave">✦</span></h1>
                 <p class="muted intro-copy">Keep your hours moving in the right direction.</p>
               </div>
-              <button class="button primary-button" id="add-entry-button"><span class="button-plus">+</span> Add time</button>
+              <button class="button primary-button clock-cta" id="top-clock-button" type="button">Clock in</button>
             </div>
 
             <div class="metric-grid">
@@ -116,7 +116,7 @@
                 <div class="card-topline"><span>Unpaid balance</span><span class="metric-icon orange-icon" id="unpaid-icon">!</span></div>
                 <div class="metric-value" id="unpaid-total">$0.00</div>
                 <div class="metric-label">Remaining from all weeks</div>
-                <div class="metric-foot metric-foot-bottom"><span class="muted" id="unpaid-detail">All caught up</span><span class="tiny-arrow">→</span></div>
+                <div class="metric-foot metric-foot-bottom"><span class="muted" id="unpaid-detail">All caught up</span><span class="unpaid-action">Record payment →</span></div>
               </article>
               <article class="metric-card active-card">
                 <div class="card-topline"><span>Active now</span><span class="metric-icon purple-icon">◷</span></div>
@@ -130,6 +130,7 @@
               <section class="panel quick-clock-panel">
                 <div class="panel-header"><div><p class="eyebrow">Live tracking</p><h2>General work</h2></div><span class="quick-clock-state" id="quick-clock-state">Ready</span></div>
                 <div id="quick-clock" aria-live="polite"></div>
+                <button class="button secondary-button add-time-button" id="add-entry-button" type="button"><span class="button-plus">+</span> Add time manually</button>
                 <div id="active-clocks" class="active-clock-list hidden"></div>
               </section>
               <section class="panel week-panel">
@@ -149,7 +150,7 @@
             <div class="calendar-toolbar week-toolbar"><button class="icon-button" id="week-prev" aria-label="Previous week">‹</button><strong id="week-view-label">This week</strong><button class="icon-button" id="week-next" aria-label="Next week">›</button><span class="toolbar-spacer"></span><label class="week-picker"><span>Jump to</span><input type="date" id="week-view-picker" aria-label="Pick any day to view its week" /></label><button class="button secondary-button" id="week-this-button">This week</button></div>
             <div class="week-summary-strip"><div><span class="strip-label">Hours</span><strong id="week-view-hours">00h 00m</strong></div><div><span class="strip-label">Gross pay</span><strong id="week-view-pay">$0.00</strong></div><div><span class="strip-label">Entries</span><strong id="week-view-count">0</strong></div><div class="strip-progress"><span class="strip-label">40h target</span><div class="progress-track"><div class="progress-fill" id="week-view-progress"></div></div></div></div>
             <div class="panel week-table-panel"><div id="week-table"></div></div>
-            <section class="panel payments-panel" aria-labelledby="week-payments-title"><div class="panel-header"><div><p class="eyebrow">Pay tracking</p><h2 id="week-payments-title">Paid for this week</h2></div><span class="soft-badge payment-badge" id="week-payment-badge"></span></div><div id="week-payments"></div><p class="muted small-text payment-help">Enter what's been paid so far, or mark the week paid in full. Any remaining balance stays visible here and on the calendar.</p></section>
+            <section class="panel payments-panel" aria-labelledby="week-payments-title"><div class="panel-header"><div><p class="eyebrow">Pay tracking</p><h2 id="week-payments-title">Paid for this week</h2></div><div class="panel-header-actions"><span class="soft-badge payment-badge" id="week-payment-badge"></span><button type="button" class="button primary-button" id="record-payment-button">Record payment</button></div></div><div id="week-payments"></div><p class="muted small-text payment-help">Payments are applied to the oldest unpaid week first. Anything extra is kept as credit for future hours.</p><div class="payment-history-block"><h3>Payment history</h3><div id="payment-history"></div></div></section>
           </section>
 
           <section class="view-panel" id="view-calendar">
@@ -229,6 +230,31 @@
           <label class="field"><span>Access</span><select id="invite-role"><option value="payer">Payer: sees hours and balances, records payments, plans shifts, adds jobs</option><option value="member">Member: full access, including editing time entries</option></select></label>
           <p class="auth-message error" id="invite-message" role="status"></p>
           <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="invite-modal">Cancel</button><button type="submit" class="button primary-button" id="invite-submit">Send invite</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="entry-detail-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="entry-detail-title">
+        <div class="modal-header"><div><p class="eyebrow" id="entry-detail-eyebrow">Time entry</p><h2 id="entry-detail-title">Entry</h2></div><button class="icon-button close-modal" data-close="entry-detail-modal" aria-label="Close">×</button></div>
+        <div id="entry-detail-body"></div>
+        <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="entry-detail-modal">Close</button></div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="payment-modal" aria-hidden="true">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
+        <div class="modal-header"><div><p class="eyebrow">Pay tracking</p><h2 id="payment-modal-title">Record a payment</h2></div><button class="icon-button close-modal" data-close="payment-modal" aria-label="Close">×</button></div>
+        <form id="payment-form">
+          <p class="muted rate-modal-copy" id="payment-balance-line"></p>
+          <label class="field" id="payment-person-field"><span>Paid to</span><select id="payment-person"></select></label>
+          <div class="form-grid two-col"><label class="field"><span>Amount</span><div class="input-prefix"><span>$</span><input type="number" id="payment-amount" min="0.01" step="0.01" inputmode="decimal" required placeholder="0.00" /></div></label><label class="field"><span>Date paid</span><input type="date" id="payment-date" required /></label></div>
+          <div class="form-grid two-col"><label class="field"><span>Method</span><select id="payment-method"><option value="venmo">Venmo</option><option value="cash">Cash</option><option value="check">Check</option><option value="bank">Bank transfer</option><option value="other">Other</option></select></label><label class="field"><span>Note <em>optional</em></span><input type="text" id="payment-note" maxlength="200" placeholder="e.g. October hours" /></label></div>
+          <div class="payment-preview" id="payment-preview" aria-live="polite"></div>
+          <a class="button venmo-button payment-venmo hidden" id="payment-venmo" href="#" target="_blank" rel="noopener">Open Venmo</a>
+          <p class="muted small-text hidden" id="payment-venmo-help">Opens Venmo with the amount filled in. Send it there, then come back and tap Submit payment.</p>
+          <p class="auth-message error" id="payment-message" role="status"></p>
+          <div class="modal-footer"><button type="button" class="button secondary-button close-modal" data-close="payment-modal">Cancel</button><button type="submit" class="button primary-button" id="payment-submit">Submit payment</button></div>
         </form>
       </section>
     </div>

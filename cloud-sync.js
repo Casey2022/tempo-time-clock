@@ -5,8 +5,9 @@
   let refreshTimer = null;
   let syncing = null;
   let channel = null;
-  // False until 0002_week_payments.sql has been run, so the rest of sync keeps working without it.
+  // False until 0004_payments_ledger.sql has been run, so the rest of sync keeps working without it.
   let paymentsAvailable = true;
+  const PAYMENT_METHODS = ['venmo', 'cash', 'check', 'bank', 'other'];
 
   const isUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const newId = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`);
@@ -95,8 +96,8 @@
       members[person.id] = { default_rate_cents: cents(person.defaultRate) };
     });
 
-    (state.payments || []).filter((payment) => isUuid(payment.personId) && /^\d{4}-\d{2}-\d{2}$/.test(payment.weekStart || '')).forEach((payment) => {
-      payments[`${payment.personId}:${payment.weekStart}`] = { workspace_id: workspaceId, person_id: payment.personId, week_start: payment.weekStart, amount_paid_cents: cents(payment.amountPaid) };
+    (state.payments || []).filter((payment) => isUuid(payment.id) && isUuid(payment.personId) && cents(payment.amount) > 0).forEach((payment) => {
+      payments[payment.id] = { id: payment.id, workspace_id: workspaceId, person_id: payment.personId, amount_cents: cents(payment.amount), paid_on: payment.paidOn, method: PAYMENT_METHODS.includes(payment.method) ? payment.method : 'other', note: payment.note || null, deleted_at: payment.deletedAt || null };
     });
 
     return { jobs, rates, entries, breaks, shifts, members, payments };
@@ -186,9 +187,15 @@
       memberIds.length ? supabaseClient.from('profiles').select('*').in('id', memberIds).then(check) : [],
       entryIds.length ? supabaseClient.from('breaks').select('*').in('time_entry_id', entryIds).then(check) : [],
       isOwner ? supabaseClient.from('workspace_invites').select('id, email, role, default_rate_cents, created_at').eq('workspace_id', workspaceId).is('accepted_at', null).order('created_at').then(check) : [],
-      supabaseClient.from('week_payments').select('person_id, week_start, amount_paid_cents').eq('workspace_id', workspaceId).then((result) => {
+      supabaseClient.from('payments').select('*').eq('workspace_id', workspaceId).order('paid_on').then(async (result) => {
         paymentsAvailable = !isMissingTable(result.error);
-        return paymentsAvailable ? check(result) : [];
+        if (paymentsAvailable) return check(result);
+        // Before 0004 is run, show the old per-week amounts (read-only) so balances stay right.
+        const legacy = await supabaseClient.from('week_payments').select('person_id, week_start, amount_paid_cents').eq('workspace_id', workspaceId);
+        return isMissingTable(legacy.error) ? [] : (check(legacy) || []).filter((row) => row.amount_paid_cents > 0).map((row) => {
+          const paidOn = new Date(`${row.week_start}T12:00:00Z`); paidOn.setUTCDate(paidOn.getUTCDate() + 6);
+          return { id: `legacy-${row.person_id}-${row.week_start}`, person_id: row.person_id, amount_cents: row.amount_paid_cents, paid_on: paidOn.toISOString().slice(0, 10), method: 'other', note: `Recorded for week of ${row.week_start}`, legacy: true };
+        });
       }),
     ]);
 
@@ -207,7 +214,10 @@
     const jobNames = new Map(jobRows.map((job) => [job.id, job.name]));
     const audit = auditRows.map((item) => ({ id: item.id, action: item.action[0].toUpperCase() + item.action.slice(1), detail: auditDetail(item, jobNames), actorId: item.actor_id || currentUser.id, at: item.created_at }));
     const previous = window.TempoApp.getState();
-    const payments = !paymentsAvailable ? (previous.payments || []) : (paymentRows || []).map((row) => ({ personId: row.person_id, weekStart: row.week_start, amountPaid: Number(row.amount_paid_cents || 0) / 100 }));
+    const mapPayment = (row) => ({ id: row.id, personId: row.person_id, amount: Number(row.amount_cents || 0) / 100, paidOn: row.paid_on, method: row.method || 'other', note: row.note || '', deletedAt: row.deleted_at || null, createdBy: row.created_by || null, createdAt: row.created_at || null, legacy: Boolean(row.legacy) });
+    const pulledPayments = (paymentRows || []).map(mapPayment);
+    // Without the table, keep payments recorded on this device (they upload once it exists).
+    const payments = paymentsAvailable ? pulledPayments : [...pulledPayments, ...(previous.payments || []).filter((payment) => isUuid(payment.id))];
     const invites = (inviteRows || []).map((invite) => ({ id: invite.id, email: invite.email, role: ROLE_LABELS[invite.role] || 'Member', defaultRate: Number(invite.default_rate_cents || 0) / 100, createdAt: invite.created_at }));
 
     const nextState = { currentUserId: currentUser.id, workspaceId, people, removedPeople: [], jobs, entries, shifts, audit, invites, payments, sync: previous.sync || {} };
@@ -259,7 +269,7 @@
     if (shifts.length) check(await supabaseClient.from('planned_shifts').upsert(shifts.map(([, row]) => row)));
     const payments = paymentsAvailable ? changed(rows, snapshot, 'payments') : [];
     if (payments.length) {
-      const result = await supabaseClient.from('week_payments').upsert(payments.map(([, row]) => row));
+      const result = await supabaseClient.from('payments').upsert(payments.map(([, row]) => row));
       if (isMissingTable(result.error)) paymentsAvailable = false;
       else check(result);
     }
@@ -291,7 +301,7 @@
     const supabaseClient = client();
     if (channel) supabaseClient.removeChannel(channel);
     channel = supabaseClient.channel(`workspace-${workspaceId}`);
-    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members', 'week_payments'].forEach((table) => {
+    ['jobs', 'job_rates', 'time_entries', 'planned_shifts', 'workspace_members', 'payments'].forEach((table) => {
       channel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `workspace_id=eq.${workspaceId}` }, scheduleRefresh);
     });
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'breaks' }, scheduleRefresh);

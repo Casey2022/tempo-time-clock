@@ -150,7 +150,8 @@ function initialState() {
 function loadState() {
   const saved = TempoStore.load(initialState());
   saved.removedPeople = Array.isArray(saved.removedPeople) ? saved.removedPeople : [];
-  saved.payments = Array.isArray(saved.payments) ? saved.payments : [];
+  // Older versions stored one amount per week; those now live in the payments table.
+  saved.payments = Array.isArray(saved.payments) ? saved.payments.filter((payment) => payment.id && payment.amount !== undefined) : [];
   // The saved status belongs to the last session; it's only "connected" again once this one syncs.
   saved.sync.status = 'offline';
   saved.sync.statusDetail = '';
@@ -269,69 +270,104 @@ function showWeek(startKey) {
 
 const roundCents = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
-function paymentFor(personId, weekStart) {
-  return (state.payments || []).find((payment) => payment.personId === personId && payment.weekStart === weekStart) || null;
+const PAYMENT_METHODS = { venmo: 'Venmo', cash: 'Cash', check: 'Check', bank: 'Bank transfer', other: 'Other' };
+
+function activePayments(personId = null) {
+  return (state.payments || []).filter((payment) => !payment.deletedAt && Number(payment.amount) > 0 && (!personId || payment.personId === personId));
+}
+
+// Each person's payments are applied to their own weeks oldest-first; anything left is credit.
+// Cached per render pass, since the calendar and overview ask for it many times.
+let allocationCache = null;
+function paymentAllocation(personId) {
+  if (!allocationCache || allocationCache.stamp !== allocationStamp()) allocationCache = { stamp: allocationStamp(), byPerson: new Map() };
+  if (allocationCache.byPerson.has(personId)) return allocationCache.byPerson.get(personId);
+  const earnedByWeek = new Map();
+  state.entries.filter((entry) => !entry.deletedAt && entry.personId === personId).forEach((entry) => {
+    const week = mondayKey(dateFromKey(entryDateKey(entry)));
+    earnedByWeek.set(week, (earnedByWeek.get(week) || 0) + entryPay(entry));
+  });
+  let pool = roundCents(activePayments(personId).reduce((total, payment) => total + Number(payment.amount), 0));
+  const totalPaid = pool;
+  const weeks = new Map();
+  [...earnedByWeek.keys()].sort().forEach((week) => {
+    const earned = roundCents(earnedByWeek.get(week));
+    const paid = roundCents(Math.min(pool, earned));
+    pool = roundCents(pool - paid);
+    weeks.set(week, { earned, paid });
+  });
+  const result = { weeks, credit: pool, totalPaid };
+  allocationCache.byPerson.set(personId, result);
+  return result;
+}
+
+// Changes whenever entries, payments or rates could change the allocation; cheap to compute.
+function allocationStamp() {
+  return `${state.entries.length}|${activePayments().length}|${activePayments().reduce((t, p) => t + Number(p.amount), 0)}|${Math.floor(Date.now() / 1000)}|${JSON.stringify(state.jobs.map((job) => job.rates))}|${state.people.map((person) => person.defaultRate).join(',')}|${state.entries.reduce((t, e) => t + (e.updatedAt ? Date.parse(e.updatedAt) || 0 : 0), 0)}`;
 }
 
 function personWeekTotals(personId, weekStart) {
   const entries = weekEntries(weekStart).filter((entry) => entry.personId === personId);
-  const earned = roundCents(entries.reduce((total, entry) => total + entryPay(entry), 0));
-  const paid = roundCents(paymentFor(personId, weekStart)?.amountPaid || 0);
-  return { minutes: entries.reduce((total, entry) => total + entryMinutes(entry), 0), earned, paid, balance: roundCents(earned - paid) };
+  const week = paymentAllocation(personId).weeks.get(weekStart) || { earned: 0, paid: 0 };
+  return { minutes: entries.reduce((total, entry) => total + entryMinutes(entry), 0), earned: week.earned, paid: week.paid, balance: roundCents(week.earned - week.paid) };
+}
+
+function payeeIds() {
+  const ids = new Set(state.people.filter((person) => person.roleKey !== 'payer').map((person) => person.id));
+  state.entries.filter((entry) => !entry.deletedAt).forEach((entry) => ids.add(entry.personId));
+  return [...ids];
 }
 
 function weekPaymentTotals(weekStart) {
-  const ids = new Set([...state.people.map((person) => person.id), ...weekEntries(weekStart).map((entry) => entry.personId), ...(state.payments || []).filter((payment) => payment.weekStart === weekStart).map((payment) => payment.personId)]);
-  return [...ids].map((id) => personWeekTotals(id, weekStart)).reduce((sum, item) => ({ earned: roundCents(sum.earned + item.earned), paid: roundCents(sum.paid + item.paid), balance: roundCents(sum.balance + item.balance) }), { earned: 0, paid: 0, balance: 0 });
+  return payeeIds().map((id) => personWeekTotals(id, weekStart)).reduce((sum, item) => ({ earned: roundCents(sum.earned + item.earned), paid: roundCents(sum.paid + item.paid), balance: roundCents(sum.balance + item.balance) }), { earned: 0, paid: 0, balance: 0 });
 }
 
 function paymentStatus({ earned, paid, balance }) {
-  if (earned <= 0 && paid <= 0) return { tone: 'none', label: 'Nothing earned' };
-  if (balance < 0) return { tone: 'over', label: `Overpaid ${formatMoney(-balance)}` };
-  if (balance === 0) return { tone: 'paid', label: 'Paid in full' };
+  if (earned <= 0) return { tone: 'none', label: 'Nothing earned' };
+  if (balance <= 0) return { tone: 'paid', label: 'Paid in full' };
   if (paid > 0) return { tone: 'partial', label: `${formatMoney(balance)} remaining` };
   return { tone: 'due', label: `${formatMoney(balance)} unpaid` };
 }
 
-// Sums what is still owed, week by week and person by person. An overpaid week
-// doesn't cancel out another week's balance.
+function personBalance(personId) {
+  const { weeks, credit } = paymentAllocation(personId);
+  const owing = [...weeks.entries()].filter(([, week]) => week.earned - week.paid > 0.004);
+  return { total: roundCents(owing.reduce((sum, [, week]) => sum + week.earned - week.paid, 0)), weeks: owing.map(([key]) => key), credit };
+}
+
 function unpaidSummary() {
-  const weeks = new Set();
-  state.entries.filter((entry) => !entry.deletedAt).forEach((entry) => weeks.add(mondayKey(dateFromKey(entryDateKey(entry)))));
-  (state.payments || []).forEach((payment) => weeks.add(payment.weekStart));
-  const owing = [];
-  let total = 0;
-  [...weeks].sort().forEach((weekStart) => {
-    const ids = new Set([...weekEntries(weekStart).map((entry) => entry.personId), ...(state.payments || []).filter((payment) => payment.weekStart === weekStart).map((payment) => payment.personId)]);
-    const balance = roundCents([...ids].reduce((sum, id) => sum + Math.max(0, personWeekTotals(id, weekStart).balance), 0));
-    if (balance > 0) { owing.push(weekStart); total += balance; }
-  });
-  return { total: roundCents(total), weeks: owing };
+  const perPerson = payeeIds().map(personBalance);
+  const weeks = [...new Set(perPerson.flatMap((item) => item.weeks))].sort();
+  return { total: roundCents(perPerson.reduce((sum, item) => sum + item.total, 0)), weeks, credit: roundCents(perPerson.reduce((sum, item) => sum + item.credit, 0)) };
 }
 
 function renderUnpaidCard() {
-  const { total, weeks } = unpaidSummary();
+  const { total, weeks, credit } = unpaidSummary();
   $('#unpaid-total').textContent = formatMoney(total);
-  $('#unpaid-detail').textContent = weeks.length ? `${weeks.length} week${weeks.length === 1 ? '' : 's'} · oldest ${formatDate(weeks[0])}` : 'All caught up';
+  $('#unpaid-detail').textContent = weeks.length ? `${weeks.length} week${weeks.length === 1 ? '' : 's'} · oldest ${formatDate(weeks[0])}` : credit > 0 ? `All caught up · ${formatMoney(credit)} credit` : 'All caught up';
   $('#unpaid-icon').textContent = weeks.length ? '!' : '✓';
   $('#unpaid-icon').className = `metric-icon ${weeks.length ? 'orange-icon' : 'green-icon'}`;
-  $('#unpaid-card').dataset.week = weeks[0] || '';
-  $('#unpaid-card').setAttribute('aria-label', weeks.length ? `Unpaid balance ${formatMoney(total)}: open the week of ${formatDate(weeks[0])}` : 'Unpaid balance: all caught up');
+  $('#unpaid-card').setAttribute('aria-label', `Unpaid balance ${formatMoney(total)}. Record a payment`);
 }
 
-function openOldestUnpaidWeek() {
-  showWeek($('#unpaid-card').dataset.week || mondayKey());
-  navigate('week');
+// Previews how a payment would be applied, oldest unpaid week first.
+function previewAllocation(personId, amount) {
+  let pool = roundCents(amount);
+  const covered = [];
+  for (const [week, data] of paymentAllocation(personId).weeks) {
+    const due = roundCents(data.earned - data.paid);
+    if (due <= 0 || pool <= 0) continue;
+    const applied = roundCents(Math.min(due, pool));
+    covered.push({ week, applied, due, full: applied >= due });
+    pool = roundCents(pool - applied);
+  }
+  return { covered, credit: pool };
 }
 
-function setWeekPayment(personId, weekStart, amount) {
-  const value = roundCents(Math.max(0, amount));
-  const existing = paymentFor(personId, weekStart);
-  const previous = existing?.amountPaid || 0;
-  if (existing) Object.assign(existing, { amountPaid: value, updatedAt: new Date().toISOString() });
-  else state.payments.push({ personId, weekStart, amountPaid: value, updatedAt: new Date().toISOString() });
-  recordAudit('Updated', `${personName(personId)} · week of ${formatDate(weekStart)} paid ${formatMoney(previous)} → ${formatMoney(value)}`);
-  commit(value === 0 ? 'Payment cleared' : `Recorded ${formatMoney(value)} paid`);
+function describeAllocation({ covered, credit }) {
+  const parts = covered.map((item) => item.full ? `${formatDate(item.week)} in full` : `${formatMoney(item.applied)} of ${formatDate(item.week)}`);
+  if (credit > 0) parts.push(`${formatMoney(credit)} as credit`);
+  return parts.length ? `covers ${parts.join(', ')}` : '';
 }
 
 function recordAudit(action, detail) {
@@ -404,6 +440,7 @@ function renderOverview() {
   renderUnpaidCard();
 
   renderQuickClock();
+  if (canEditTime()) renderTopClock();
   const activeContainer = $('#active-clocks');
   const quickJob = generalWorkJob();
   const active = !canEditTime() ? [] : activeEntries().filter((entry) => !(quickJob && entry.personId === state.currentUserId && entry.jobId === quickJob.id)).sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -437,11 +474,26 @@ function renderQuickClock() {
   const entry = quickClockEntry();
   if (!entry) {
     stateLabel.textContent = 'Ready';
-    container.innerHTML = '<div class="quick-clock-row"><div><div class="quick-clock-title">Clock in for general work</div><div class="quick-clock-help">Start time is recorded immediately. You can add details later.</div></div><button type="button" class="button primary-button quick-clock-button" id="quick-clock-in">Clock in</button></div>';
+    container.innerHTML = '<div class="quick-clock-row"><div><div class="quick-clock-title">Not clocked in</div><div class="quick-clock-help">Tap Clock in at the top to start tracking general work. Your start time is recorded right away.</div></div></div>';
     return;
   }
   stateLabel.textContent = 'Running';
-  container.innerHTML = `<div class="quick-clock-row running"><div><div class="quick-clock-title">General work in progress</div><div class="quick-clock-elapsed">${formatHours(rawEntryMinutes(entry))}</div><div class="quick-clock-help">Started ${formatTime(entry.start)}</div></div><button type="button" class="button danger-button quick-clock-button" id="quick-clock-out">Clock out</button></div>`;
+  container.innerHTML = `<div class="quick-clock-row running"><div><div class="quick-clock-title">General work in progress</div><div class="quick-clock-elapsed">${formatHours(rawEntryMinutes(entry))}</div><div class="quick-clock-help">Clocked in at ${formatTime(entry.start)} · tap Clock out at the top when you're done</div></div></div>`;
+}
+
+// The main button at the top of Overview: Clock in, or Clock out with the running time.
+function renderTopClock() {
+  const button = $('#top-clock-button');
+  const entry = quickClockEntry();
+  button.classList.toggle('danger-button', Boolean(entry));
+  button.classList.toggle('primary-button', !entry);
+  button.innerHTML = entry ? `Clock out <span class="clock-cta-time">${formatHours(rawEntryMinutes(entry))}</span>` : 'Clock in';
+  button.setAttribute('aria-label', entry ? `Clock out, ${formatHours(rawEntryMinutes(entry))} so far` : 'Clock in for general work');
+}
+
+function toggleTopClock() {
+  const entry = quickClockEntry();
+  if (entry) stopClock(entry.id); else startGeneralClock();
 }
 
 function startGeneralClock() {
@@ -460,8 +512,8 @@ function renderActiveClock(entry) {
 
 function renderRecentEntry(entry) {
   const date = entryDateKey(entry);
-  const open = canEditTime() ? `<button type="button" class="entry-row entry-row-button" data-edit-entry="${entry.id}" aria-label="Edit ${escapeHtml(jobName(entry.jobId))} entry">` : '<div class="entry-row">';
-  return `${open}<div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div>${canEditTime() ? '</button>' : '</div>'}`;
+  const open = `<button type="button" class="entry-row entry-row-button" data-edit-entry="${entry.id}" aria-label="${canEditTime() ? 'Edit' : 'View'} ${escapeHtml(jobName(entry.jobId))} entry">`;
+  return `${open}<div class="date-chip"><strong>${dateFromKey(date).getUTCDate()}</strong>${new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: TIMEZONE }).format(dateFromKey(date))}</div><div class="entry-details"><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))} · ${entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'active'}`}</div></div><div><div class="entry-total">${formatHours(entryMinutes(entry))}</div><div class="entry-pay">${formatMoney(entryPay(entry))}</div></div></button>`;
 }
 
 function renderShift(shift) {
@@ -485,8 +537,7 @@ function renderWeek() {
   $('#week-view-eyebrow').textContent = `${formatDate(start, { weekday: 'long', month: 'long', day: 'numeric' })} – ${formatDate(end, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
   $('#week-view-label').textContent = isCurrent ? `This week · ${weekLabel(start)}` : weekLabel(start);
   if (document.activeElement !== $('#week-view-picker')) $('#week-view-picker').value = start;
-  // renderWeek runs every second while a clock is live; don't redraw under someone typing an amount.
-  if (!document.activeElement?.matches?.('#week-payments [data-payment-person]')) renderWeekPayments(start);
+  renderWeekPayments(start);
   $('#week-this-button').disabled = isCurrent;
   $('#week-table').innerHTML = Array.from({ length: 7 }, (_, index) => {
     const day = addDaysToKey(start, index);
@@ -496,44 +547,104 @@ function renderWeek() {
   }).join('');
 }
 
-let pendingVenmo = null; // { personId, weekStart, amount } after "Pay with Venmo" opens Venmo
-
-function venmoLink(person, amount, weekStart) {
-  const note = `Tempo · week of ${formatDate(weekStart, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+function venmoLink(person, amount) {
+  const note = `Tempo · payment ${formatDate(dateKeyFromDate(), { month: 'short', day: 'numeric', year: 'numeric' })}`;
   return `https://venmo.com/${encodeURIComponent(person.venmo)}?txn=pay&amount=${amount.toFixed(2)}&note=${encodeURIComponent(note)}`;
 }
 
-function renderVenmoControls(person, totals, start) {
-  if (pendingVenmo && pendingVenmo.personId === person.id && pendingVenmo.weekStart === start) {
-    return `<div class="venmo-confirm" role="group" aria-label="Confirm Venmo payment"><span>Did you send ${formatMoney(pendingVenmo.amount)} on Venmo?</span><button type="button" class="button primary-button" data-venmo-confirm="${person.id}">Yes, record it</button><button type="button" class="button secondary-button" data-venmo-cancel="${person.id}">Not yet</button></div>`;
-  }
-  if (person.id === state.currentUserId || !person.venmo || totals.balance <= 0) return '';
-  return `<a class="button venmo-button" href="${venmoLink(person, totals.balance, start)}" target="_blank" rel="noopener" data-venmo-pay="${person.id}" data-venmo-amount="${totals.balance}">Pay ${formatMoney(totals.balance)} with Venmo</a>`;
+function canDeletePayment(payment) {
+  return !payment.legacy && (currentRoleKey() === 'owner' || payment.createdBy === state.currentUserId || !payment.createdBy);
 }
 
 function renderWeekPayments(start) {
-  const people = state.people.filter((person) => person.roleKey !== 'payer');
-  weekEntries(start).forEach((entry) => { if (!people.some((person) => person.id === entry.personId)) people.push({ id: entry.personId, name: personName(entry.personId), initials: '?', avatar: 'indigo' }); });
+  const people = payeeIds().map((id) => personById(id) || { id, name: personName(id), initials: '?', avatar: 'indigo' });
   const rows = people.map((person) => {
     const totals = personWeekTotals(person.id, start);
     const status = paymentStatus(totals);
-    return `<div class="payment-row"><div class="avatar avatar-${person.avatar || 'indigo'}">${escapeHtml(person.initials || '?')}</div><div class="payment-person"><strong>${escapeHtml(person.name)}</strong><span>${formatDecimalHours(totals.minutes)}h · earned ${formatMoney(totals.earned)}</span></div><label class="field payment-input"><span>Paid</span><div class="input-prefix"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-payment-person="${person.id}" value="${totals.paid ? totals.paid.toFixed(2) : ''}" placeholder="0.00" aria-label="Amount paid to ${escapeHtml(person.name)} for this week" /></div></label><button type="button" class="button secondary-button payment-full-button" data-pay-full="${person.id}" ${totals.earned <= 0 || totals.balance === 0 ? 'disabled' : ''}>Mark paid in full</button><div class="payment-balance ${status.tone}"><span>Balance</span><strong>${formatMoney(Math.max(0, totals.balance))}</strong><em>${escapeHtml(status.label)}</em></div>${renderVenmoControls(person, totals, start)}</div>`;
+    return `<div class="payment-row"><div class="avatar avatar-${person.avatar || 'indigo'}">${escapeHtml(person.initials || '?')}</div><div class="payment-person"><strong>${escapeHtml(person.name)}</strong><span>${formatDecimalHours(totals.minutes)}h · earned ${formatMoney(totals.earned)}</span></div><div class="payment-applied"><span>Paid</span><strong>${formatMoney(totals.paid)}</strong></div><div class="payment-balance ${status.tone}"><span>Balance</span><strong>${formatMoney(Math.max(0, totals.balance))}</strong><em>${escapeHtml(status.label)}</em></div></div>`;
   }).join('');
-  const me = personById(state.currentUserId);
-  const venmoHint = canEditTime() && me && !me.venmo && state.people.some((person) => person.roleKey === 'payer') ? '<p class="muted small-text payment-help">Add your Venmo username under Account so your payer can pay you straight from this page.</p>' : '';
   const totals = weekPaymentTotals(start);
   const status = paymentStatus(totals);
   $('#week-payment-badge').textContent = status.label;
   $('#week-payment-badge').className = `soft-badge payment-badge ${status.tone}`;
   const footer = people.length > 1 ? `<div class="payment-totals"><span>Week total</span><span>Earned <strong>${formatMoney(totals.earned)}</strong></span><span>Paid <strong>${formatMoney(totals.paid)}</strong></span><span>Balance <strong>${formatMoney(Math.max(0, totals.balance))}</strong></span></div>` : '';
+  const me = personById(state.currentUserId);
+  const venmoHint = canEditTime() && me && !me.venmo && state.people.some((person) => person.roleKey === 'payer') ? '<p class="muted small-text payment-help">Add your Venmo username under Account so your payer can pay you with Venmo from Tempo.</p>' : '';
   $('#week-payments').innerHTML = rows + footer + venmoHint;
+  renderPaymentHistory();
+}
+
+function renderPaymentHistory() {
+  const payments = activePayments().sort((a, b) => (b.paidOn || '').localeCompare(a.paidOn || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const { credit } = unpaidSummary();
+  $('#payment-history').innerHTML = payments.length
+    ? `${credit > 0 ? `<div class="payment-credit">Credit on account: <strong>${formatMoney(credit)}</strong>, applied automatically to future hours.</div>` : ''}${payments.map((payment) => `<div class="history-row"><div class="history-date">${formatDate(payment.paidOn, { month: 'short', day: 'numeric', year: 'numeric' })}</div><div class="history-details"><strong>${formatMoney(payment.amount)}</strong> · ${escapeHtml(PAYMENT_METHODS[payment.method] || 'Other')}${payeeIds().length > 1 ? ` · to ${escapeHtml(personName(payment.personId))}` : ''}${payment.note ? `<span>${escapeHtml(payment.note)}</span>` : ''}</div>${canDeletePayment(payment) ? `<button type="button" class="text-button danger-text" data-delete-payment="${payment.id}" aria-label="Delete ${formatMoney(payment.amount)} payment">Delete</button>` : ''}</div>`).join('')}`
+    : '<div class="empty-day">No payments recorded yet.</div>';
+}
+
+function openPaymentModal(personId = null) {
+  const payees = payeeIds().map((id) => personById(id) || { id, name: personName(id) });
+  if (!payees.length) { showToast('There is no one to pay yet'); return; }
+  const target = personId || payees.slice().sort((a, b) => personBalance(b.id).total - personBalance(a.id).total)[0].id;
+  $('#payment-form').reset();
+  $('#payment-person').innerHTML = payees.map((person) => `<option value="${person.id}">${escapeHtml(person.name)}</option>`).join('');
+  $('#payment-person').value = target;
+  $('#payment-person-field').classList.toggle('hidden', payees.length < 2);
+  $('#payment-date').value = dateKeyFromDate();
+  $('#payment-method').value = 'venmo';
+  $('#payment-amount').value = personBalance(target).total > 0 ? personBalance(target).total.toFixed(2) : '';
+  $('#payment-message').textContent = '';
+  updatePaymentPreview();
+  openModal('payment-modal');
+  setTimeout(() => $('#payment-amount').focus(), 50);
+}
+
+function updatePaymentPreview() {
+  const personId = $('#payment-person').value;
+  const amount = roundCents($('#payment-amount').value);
+  const balance = personBalance(personId);
+  $('#payment-balance-line').textContent = balance.total > 0 ? `${personName(personId)} is owed ${formatMoney(balance.total)} across ${balance.weeks.length} week${balance.weeks.length === 1 ? '' : 's'}, oldest ${formatDate(balance.weeks[0])}.` : `${personName(personId)} is all caught up${balance.credit > 0 ? `, with ${formatMoney(balance.credit)} credit` : ''}.`;
+  const preview = amount > 0 ? previewAllocation(personId, amount) : { covered: [], credit: 0 };
+  $('#payment-preview').innerHTML = amount > 0
+    ? `<div class="preview-title">This payment will cover</div>${preview.covered.map((item) => `<div class="preview-row"><span>Week of ${formatDate(item.week, { month: 'short', day: 'numeric', year: 'numeric' })}</span><strong>${formatMoney(item.applied)}</strong><em>${item.full ? 'paid off' : `of ${formatMoney(item.due)}`}</em></div>`).join('')}${preview.credit > 0 ? `<div class="preview-row credit"><span>Extra, kept as credit</span><strong>${formatMoney(preview.credit)}</strong><em>for future hours</em></div>` : ''}`
+    : '';
+  const payee = personById(personId);
+  const venmoReady = $('#payment-method').value === 'venmo' && payee?.venmo && personId !== state.currentUserId && amount > 0;
+  $('#payment-venmo').classList.toggle('hidden', !venmoReady);
+  if (venmoReady) { $('#payment-venmo').href = venmoLink(payee, amount); $('#payment-venmo').textContent = `Open Venmo to send ${formatMoney(amount)}`; }
+  $('#payment-venmo-help').classList.toggle('hidden', !venmoReady);
+}
+
+function handlePaymentSubmit(event) {
+  event.preventDefault();
+  const personId = $('#payment-person').value;
+  const amount = roundCents($('#payment-amount').value);
+  const paidOn = $('#payment-date').value;
+  if (!(amount > 0)) { $('#payment-message').textContent = 'Enter an amount greater than $0.'; $('#payment-amount').focus(); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) { $('#payment-message').textContent = 'Choose the date it was paid.'; return; }
+  const summary = describeAllocation(previewAllocation(personId, amount));
+  const method = $('#payment-method').value;
+  state.payments = state.payments || [];
+  state.payments.push({ id: generateUuid(), personId, amount, paidOn, method, note: $('#payment-note').value.trim(), createdBy: state.currentUserId, createdAt: new Date().toISOString() });
+  recordAudit('Created', `${formatMoney(amount)} ${PAYMENT_METHODS[method] || ''} payment to ${personName(personId)}${summary ? ` · ${summary}` : ''}`);
+  closeModal('payment-modal');
+  commit(`Payment of ${formatMoney(amount)} submitted${summary ? ` · ${summary}` : ''}`);
+}
+
+function deletePayment(paymentId) {
+  const payment = activePayments().find((item) => item.id === paymentId);
+  if (!payment || !canDeletePayment(payment)) return;
+  if (!window.confirm(`Delete the ${formatMoney(payment.amount)} payment from ${formatDate(payment.paidOn, { month: 'short', day: 'numeric', year: 'numeric' })}? The weeks it covered will show as unpaid again.`)) return;
+  payment.deletedAt = new Date().toISOString();
+  recordAudit('Deleted', `${formatMoney(payment.amount)} payment to ${personName(payment.personId)}`);
+  commit('Payment deleted');
 }
 
 function renderTableEntry(entry) {
   const range = entry.mode === 'duration' ? 'Duration entry' : `${formatTime(entry.start)} – ${entry.end ? formatTime(entry.end) : 'Active'}`;
   const breakAction = entry.mode === 'duration' ? '' : `<button data-add-break-entry="${entry.id}">Break</button>`;
-  const actions = canEditTime() ? `<div class="table-actions">${breakAction}<button data-edit-entry="${entry.id}">Edit</button><button data-delete-entry="${entry.id}">Delete</button></div>` : '';
-  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div>${actions}</div></div>`;
+  const actions = canEditTime() ? `<div class="table-actions">${breakAction}<button data-edit-entry="${entry.id}">Edit</button><button data-delete-entry="${entry.id}">Delete</button></div>` : `<div class="table-actions"><button data-view-entry="${entry.id}">View</button></div>`;
+  return `<div class="table-entry"><span class="job-dot" style="background:${colorForJob(entry.jobId)}"></span><div><div class="entry-title">${escapeHtml(jobName(entry.jobId))}</div><div class="entry-subtitle">${escapeHtml(personName(entry.personId))}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</div><div class="entry-subtitle entry-range-mobile">${range}${(entry.breaks || []).length ? ` · ${entry.breaks.length} break${entry.breaks.length === 1 ? '' : 's'}` : ''}</div></div><div class="table-time">${range}</div><div class="table-hours">${formatHours(entryMinutes(entry))}</div><div class="table-pay-cell"><div class="table-pay">${formatMoney(entryPay(entry))}</div>${actions}</div></div>`;
 }
 
 function colorForJob(jobId) {
@@ -576,7 +687,7 @@ function renderCalendarWeekTotal(startKey) {
   const pay = entries.reduce((total, entry) => total + entryPay(entry), 0);
   const current = startKey === mondayKey();
   const status = paymentStatus(weekPaymentTotals(startKey));
-  const statusLine = status.tone === 'paid' ? '<em class="week-pay-status paid">✓ Paid</em>' : status.tone === 'partial' ? `<em class="week-pay-status partial">${escapeHtml(status.label.replace(' remaining', ' due'))}</em>` : status.tone === 'over' ? `<em class="week-pay-status over">${escapeHtml(status.label)}</em>` : '';
+  const statusLine = status.tone === 'paid' ? '<em class="week-pay-status paid">✓ Paid</em>' : status.tone === 'partial' ? `<em class="week-pay-status partial">${escapeHtml(status.label.replace(' remaining', ' due'))}</em>` : '';
   return `<button type="button" class="calendar-week-total ${minutes ? '' : 'empty'} ${current ? 'current' : ''}" data-calendar-week="${startKey}" aria-label="Open week of ${formatDate(startKey, { month: 'long', day: 'numeric' })}: ${formatDecimalHours(minutes)} hours, ${formatMoney(pay)}${status.tone === 'none' ? '' : `, ${status.label}`}"><strong>${formatDecimalHours(minutes)}h</strong><span>${formatMoney(pay)}</span>${statusLine}</button>`;
 }
 
@@ -708,7 +819,7 @@ function setEntryMode(mode) {
 }
 
 function openEntryModal(mode = 'timer', entryId = null) {
-  if (!canEditTime()) { showToast('Time entries are view-only for payers'); return; }
+  if (!canEditTime()) { if (entryId) openEntryDetail(entryId); return; }
   $('#entry-form').reset();
   const nowInput = isoToInput(new Date().toISOString());
   $('#entry-start').value = nowInput;
@@ -744,6 +855,23 @@ function openEntryModal(mode = 'timer', entryId = null) {
     $('#entry-delete-button').classList.remove('hidden');
   }
   openModal('entry-modal');
+}
+
+function openEntryDetail(entryId) {
+  const entry = state.entries.find((item) => item.id === entryId && !item.deletedAt);
+  if (!entry) return;
+  const date = entryDateKey(entry);
+  const raw = rawEntryMinutes(entry);
+  const rows = [['Date', formatDate(date, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })], ['Person', personName(entry.personId)]];
+  if (entry.mode === 'duration') rows.push(['Logged as', `${Number(entry.durationMinutes || 0)} hours (no clock times)`]);
+  else rows.push(['Clocked in', formatTime(entry.start)], ['Clocked out', entry.end ? formatTime(entry.end) : 'Still on the clock']);
+  const breaks = (entry.breaks || []).map((item) => `<li>${item.start ? `${formatTime(item.start)} – ${item.end ? formatTime(item.end) : 'now'}` : 'Break'} · ${formatHours(breakMinutes(item))} · ${item.paid ? 'paid' : 'unpaid'}</li>`).join('');
+  rows.push(['Time worked', `${formatHours(raw)}${entry.mode === 'duration' ? '' : ' after unpaid breaks'}`], ['Rounded for pay', `${formatHours(entryMinutes(entry))} (${formatDecimalHours(entryMinutes(entry))}h)`], ['Rate', `${formatMoney(entryRate(entry))}/h${entry.rateOverride !== null && entry.rateOverride !== undefined && entry.rateOverride !== '' ? ' (set on this entry)' : ''}`], ['Pay', formatMoney(entryPay(entry))]);
+  if (entry.note) rows.push(['Note', entry.note]);
+  $('#entry-detail-title').textContent = jobName(entry.jobId);
+  $('#entry-detail-eyebrow').textContent = entry.end || entry.mode === 'duration' ? 'Time entry' : 'Running now';
+  $('#entry-detail-body').innerHTML = `<dl class="detail-list">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${breaks ? `<div class="detail-breaks"><strong>Breaks</strong><ul>${breaks}</ul></div>` : ''}`;
+  openModal('entry-detail-modal');
 }
 
 function openEntryModalForDate(dateKey) {
@@ -1029,7 +1157,8 @@ function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, (cha
 function bindEvents() {
   $$('.nav-item').forEach((item) => item.addEventListener('click', () => navigate(item.dataset.view)));
   $$('[data-view-link]').forEach((item) => item.addEventListener('click', () => navigate(item.dataset.viewLink)));
-  $('#add-entry-button').addEventListener('click', () => openEntryModal('timer'));
+  $('#add-entry-button').addEventListener('click', () => openEntryModal('range'));
+  $('#top-clock-button').addEventListener('click', toggleTopClock);
   $('#quick-clock').addEventListener('click', (event) => { if (event.target.closest('#quick-clock-in')) startGeneralClock(); if (event.target.closest('#quick-clock-out')) { const entry = quickClockEntry(); if (entry) stopClock(entry.id); } });
   $('#week-add-button').addEventListener('click', () => openEntryModal('range'));
   $('#add-shift-button').addEventListener('click', openShiftModal);
@@ -1041,26 +1170,14 @@ function bindEvents() {
   $('#profile-form').addEventListener('submit', handleProfileSubmit);
   $('#sync-card').addEventListener('click', () => { if (state.sync?.status === 'attention') window.TempoCloud?.refresh?.(); });
   $('#recent-entries').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); });
-  $('#unpaid-card').addEventListener('click', openOldestUnpaidWeek);
-  $('#unpaid-card').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openOldestUnpaidWeek(); } });
-  $('#week-payments').addEventListener('change', (event) => {
-    const input = event.target.closest('[data-payment-person]');
-    if (!input) return;
-    const amount = input.value.trim() === '' ? 0 : Number(input.value);
-    if (!Number.isFinite(amount) || amount < 0) { showToast('Enter a paid amount of zero or more'); input.value = ''; return; }
-    input.blur();
-    setWeekPayment(input.dataset.paymentPerson, viewedWeekStart(), amount);
-  });
-  $('#week-payments').addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.matches('[data-payment-person]')) event.target.blur(); });
-  $('#week-payments').addEventListener('click', (event) => {
-    const pay = event.target.closest('[data-venmo-pay]');
-    if (pay) { pendingVenmo = { personId: pay.dataset.venmoPay, weekStart: viewedWeekStart(), amount: roundCents(pay.dataset.venmoAmount) }; setTimeout(() => renderWeekPayments(viewedWeekStart()), 0); return; }
-    const confirmPay = event.target.closest('[data-venmo-confirm]');
-    if (confirmPay && pendingVenmo) { const { personId, weekStart, amount } = pendingVenmo; pendingVenmo = null; setWeekPayment(personId, weekStart, personWeekTotals(personId, weekStart).paid + amount); return; }
-    if (event.target.closest('[data-venmo-cancel]')) { pendingVenmo = null; renderWeekPayments(viewedWeekStart()); return; }
-    const button = event.target.closest('[data-pay-full]');
-    if (button) setWeekPayment(button.dataset.payFull, viewedWeekStart(), personWeekTotals(button.dataset.payFull, viewedWeekStart()).earned);
-  });
+  $('#unpaid-card').addEventListener('click', () => openPaymentModal());
+  $('#unpaid-card').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPaymentModal(); } });
+  $('#record-payment-button').addEventListener('click', () => openPaymentModal());
+  $('#payment-form').addEventListener('submit', handlePaymentSubmit);
+  ['#payment-person', '#payment-amount', '#payment-method'].forEach((selector) => $(selector).addEventListener('input', updatePaymentPreview));
+  $('#payment-person').addEventListener('change', () => { const balance = personBalance($('#payment-person').value).total; $('#payment-amount').value = balance > 0 ? balance.toFixed(2) : ''; updatePaymentPreview(); });
+  $('#payment-venmo').addEventListener('click', () => { $('#payment-message').textContent = ''; $('#payment-venmo-help').textContent = 'After you send it in Venmo, come back and tap Submit payment.'; });
+  $('#payment-history').addEventListener('click', (event) => { const remove = event.target.closest('[data-delete-payment]'); if (remove) deletePayment(remove.dataset.deletePayment); });
   $('#week-prev').addEventListener('click', () => showWeek(addDaysToKey(viewedWeekStart(), -7)));
   $('#week-next').addEventListener('click', () => showWeek(addDaysToKey(viewedWeekStart(), 7)));
   $('#week-this-button').addEventListener('click', () => showWeek(mondayKey()));
@@ -1083,9 +1200,10 @@ function bindEvents() {
   $('#jobs-list').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-job]'); if (edit) openJobModal(edit.dataset.editJob); });
   $('#break-form').addEventListener('submit', handleBreakSubmit);
   $('#active-clocks').addEventListener('click', (event) => { const stop = event.target.closest('[data-stop-entry]'); const toggle = event.target.closest('[data-break-entry]'); if (stop) stopClock(stop.dataset.stopEntry); if (toggle) toggleBreak(toggle.dataset.breakEntry); });
+  $('#week-table').addEventListener('click', (event) => { const view = event.target.closest('[data-view-entry]'); if (view) openEntryDetail(view.dataset.viewEntry); });
   $('#week-table').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-entry]'); const remove = event.target.closest('[data-delete-entry]'); const addBreak = event.target.closest('[data-add-break-entry]'); if (edit) openEntryModal('range', edit.dataset.editEntry); if (remove) deleteEntry(remove.dataset.deleteEntry); if (addBreak) openBreakModal(addBreak.dataset.addBreakEntry); });
   $('#upcoming-shifts').addEventListener('click', (event) => { const edit = event.target.closest('[data-edit-shift]'); const remove = event.target.closest('[data-delete-shift]'); if (edit) openShiftModal(edit.dataset.editShift); if (remove) deleteShift(remove.dataset.deleteShift); });
-  $('#calendar-grid').addEventListener('click', (event) => { const entry = event.target.closest('[data-calendar-entry]'); const shift = event.target.closest('[data-calendar-shift]'); const day = event.target.closest('[data-calendar-day]'); const week = event.target.closest('[data-calendar-week]'); if (week) { showWeek(week.dataset.calendarWeek); navigate('week'); } else if (!canEditTime() && entry) showToast('Time entries are view-only for payers'); else if (!canEditTime() && day) openShiftModalForDate(day.dataset.calendarDay); else if (entry) openEntryModal('range', entry.dataset.calendarEntry); else if (shift) openShiftModal(shift.dataset.calendarShift); else if (day) openEntryModalForDate(day.dataset.calendarDay); });
+  $('#calendar-grid').addEventListener('click', (event) => { const entry = event.target.closest('[data-calendar-entry]'); const shift = event.target.closest('[data-calendar-shift]'); const day = event.target.closest('[data-calendar-day]'); const week = event.target.closest('[data-calendar-week]'); if (week) { showWeek(week.dataset.calendarWeek); navigate('week'); } else if (!canEditTime() && entry) openEntryDetail(entry.dataset.calendarEntry); else if (!canEditTime() && day) openShiftModalForDate(day.dataset.calendarDay); else if (entry) openEntryModal('range', entry.dataset.calendarEntry); else if (shift) openShiftModal(shift.dataset.calendarShift); else if (day) openEntryModalForDate(day.dataset.calendarDay); });
   $('#calendar-prev').addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() - 1); renderCalendar(); });
   $('#calendar-next').addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() + 1); renderCalendar(); });
   $('#calendar-today-button').addEventListener('click', () => { calendarCursor = new Date(); calendarCursor.setDate(1); renderCalendar(); });

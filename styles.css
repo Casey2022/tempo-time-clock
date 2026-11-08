@@ -370,7 +370,12 @@ button { cursor: pointer; }
 .week-pay-status.over { color: var(--purple); }
 
 /* Payer access: time entries are view-only */
-.role-payer #add-entry-button, .role-payer #week-add-button { display: none; }
+.role-payer #add-entry-button, .role-payer #week-add-button, .role-payer #top-clock-button { display: none; }
+.clock-cta { min-width: 150px; justify-content: center; gap: 10px; font-size: 14px; }
+.clock-cta-time { padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.22); font-variant-numeric: tabular-nums; font-size: 12px; }
+.clock-cta.danger-button { background: #d64545; border-color: transparent; color: white; box-shadow: 0 10px 22px rgba(214,69,69,.22); }
+.clock-cta.danger-button:hover { background: #c13a3a; }
+.add-time-button { width: 100%; justify-content: center; margin-top: 14px; }
 .job-locked { color: var(--ink-faint); font-size: 10px; font-weight: 650; white-space: nowrap; }
 
 /* Venmo */
@@ -381,6 +386,37 @@ button { cursor: pointer; }
 .profile-form { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .profile-form .button { width: auto; }
 
+/* Entry details (read-only) */
+.entry-range-mobile { display: none; }
+.detail-list { margin: 0; }
+.detail-list div { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.detail-list dt { color: var(--ink-faint); font-weight: 650; }
+.detail-list dd { margin: 0; font-weight: 600; }
+.detail-breaks { margin-top: 14px; font-size: 13px; }
+.detail-breaks ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
+.role-payer .table-actions { opacity: 1; }
+
+/* Payments ledger */
+.payment-row { grid-template-columns: 34px minmax(120px, 1fr) 110px 150px; }
+.payment-applied { text-align: right; }
+.payment-applied span { display: block; color: var(--ink-faint); font-size: 9px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+.payment-applied strong { display: block; margin-top: 3px; font-size: 16px; letter-spacing: -.03em; }
+.payment-history-block { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.payment-history-block h3 { margin: 0 0 8px; font-size: 13px; }
+.history-row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.history-row:last-child { border-bottom: 0; }
+.history-date { color: var(--ink-soft); font-weight: 650; }
+.history-details span { display: block; margin-top: 2px; color: var(--ink-faint); font-size: 11px; }
+.payment-credit { margin-bottom: 8px; padding: 9px 12px; border-radius: 9px; background: var(--green-soft); color: var(--green); font-size: 12px; }
+.payment-preview:not(:empty) { margin: 2px 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--surface-soft); border: 1px solid var(--line); }
+.preview-title { margin-bottom: 6px; color: var(--ink-faint); font-size: 9px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+.preview-row { display: grid; grid-template-columns: 1fr auto 70px; gap: 10px; padding: 4px 0; font-size: 12px; }
+.preview-row strong { text-align: right; }
+.preview-row em { color: var(--green); font-style: normal; font-size: 11px; text-align: right; }
+.preview-row.credit em { color: var(--ink-faint); }
+.payment-venmo { display: flex; justify-content: center; width: 100%; margin-bottom: 6px; }
+.unpaid-action { color: var(--indigo); font-weight: 700; }
+
 @media (max-width: 1000px) {
   .sidebar { width: 215px; }
   .page-content { padding-inline: 3vw; }.topbar { padding-inline: 3vw; }
@@ -390,9 +426,9 @@ button { cursor: pointer; }
   .auth-card { padding: 24px; }
   .auth-actions { flex-direction: column; }
   .sidebar { position: fixed; left: -270px; z-index: 30; width: 246px; background: var(--surface); border-right-color: var(--line-strong); box-shadow: 12px 0 35px rgba(24,28,45,.18); transition: left .2s ease; }.sidebar.open { left: 0; }
-  .mobile-menu { display: grid; }.topbar { height: 65px; padding-inline: 16px; }.topbar-actions { gap: 9px; }.connection-pill { display: none; }.page-content { padding: 30px 16px 60px; }.welcome-row, .section-heading-row { align-items: flex-start; flex-direction: column; gap: 18px; margin-bottom: 23px; }.welcome-row .button, .section-heading-row .button { width: 100%; }.section-heading-row h1 { font-size: 27px; }
+  .mobile-menu { display: grid; }.topbar { height: 65px; padding-inline: 16px; }.topbar-actions { gap: 9px; }.connection-pill { display: none; }.page-content { padding: 30px 16px 60px; }.welcome-row, .section-heading-row { align-items: flex-start; flex-direction: column; gap: 18px; margin-bottom: 23px; }.welcome-row .button, .section-heading-row .button { width: 100%; }.clock-cta { min-height: 56px; font-size: 16px; }.section-heading-row h1 { font-size: 27px; }
   .metric-grid { grid-template-columns: 1fr 1fr; gap: 10px; }.featured-card { grid-column: span 2; }.metric-card { padding: 17px; min-height: 145px; }.metric-value { font-size: 25px; }.metric-foot-bottom { margin-top: 18px; }
-  .panel { padding: 18px; }.week-summary-strip { grid-template-columns: repeat(2, 1fr); gap: 18px; }.strip-progress { grid-column: span 2; }.table-entry { grid-template-columns: 18px minmax(100px,1fr) 85px 65px; }.table-time { display: none; }.table-actions, .row-actions { opacity: 1; }.week-table-panel { padding-inline: 15px; }.calendar-cell { min-height: 85px; padding: 6px; }.calendar-weekday { padding-inline: 5px; font-size: 8px; }.calendar-event { font-size: 8px; padding: 3px; }.calendar-event span:not(.calendar-event-dot) { overflow: hidden; text-overflow: ellipsis; }.calendar-toolbar { flex-wrap: wrap; height: auto; padding-bottom: 12px; }.toolbar-spacer { display: none; }.calendar-panel { padding: 0; }.calendar-grid { grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(52px, .9fr); }.calendar-week-total { padding: 6px 4px; }.calendar-week-total strong { font-size: 9px; }.calendar-week-total span { font-size: 8px; }.week-toolbar .button { width: auto; }.payment-row { grid-template-columns: 34px 1fr auto; gap: 10px 12px; }.payment-input { grid-column: 2 / 4; }.payment-full-button { grid-column: 2; justify-self: start; width: auto !important; }.payment-balance { grid-column: 3; grid-row: 1; }.venmo-button, .venmo-confirm { grid-column: 1 / -1; justify-self: stretch; text-align: center; }.venmo-confirm .button { flex: 1; }.payment-totals { justify-content: flex-start; gap: 10px 18px; }.payment-totals span:first-child { width: 100%; }.week-pay-status { font-size: 7px; }
+  .panel { padding: 18px; }.week-summary-strip { grid-template-columns: repeat(2, 1fr); gap: 18px; }.strip-progress { grid-column: span 2; }.table-entry { grid-template-columns: 18px minmax(100px,1fr) 85px 65px; }.table-time { display: none; }.entry-range-mobile { display: block; margin-top: 3px; color: var(--ink-soft); font-weight: 600; }.detail-list div { grid-template-columns: 110px 1fr; }.table-actions, .row-actions { opacity: 1; }.week-table-panel { padding-inline: 15px; }.calendar-cell { min-height: 85px; padding: 6px; }.calendar-weekday { padding-inline: 5px; font-size: 8px; }.calendar-event { font-size: 8px; padding: 3px; }.calendar-event span:not(.calendar-event-dot) { overflow: hidden; text-overflow: ellipsis; }.calendar-toolbar { flex-wrap: wrap; height: auto; padding-bottom: 12px; }.toolbar-spacer { display: none; }.calendar-panel { padding: 0; }.calendar-grid { grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(52px, .9fr); }.calendar-week-total { padding: 6px 4px; }.calendar-week-total strong { font-size: 9px; }.calendar-week-total span { font-size: 8px; }.week-toolbar .button { width: auto; }.payment-row { grid-template-columns: 34px 1fr auto auto; gap: 10px 12px; }.panel-header-actions { flex-wrap: wrap; justify-content: flex-end; }.history-row { grid-template-columns: 80px 1fr auto; }.venmo-button, .venmo-confirm { grid-column: 1 / -1; justify-self: stretch; text-align: center; }.venmo-confirm .button { flex: 1; }.payment-totals { justify-content: flex-start; gap: 10px 18px; }.payment-totals span:first-child { width: 100%; }.week-pay-status { font-size: 7px; }
   .activity-panel { padding-inline: 14px; }.activity-header, .activity-row { grid-template-columns: 1.3fr .7fr; }.activity-header span:last-child, .activity-time { display: none; }.form-grid.two-col { grid-template-columns: 1fr; gap: 0; }.modal { padding: 20px; }.break-row { grid-template-columns: 1fr 1fr; }.paid-toggle { grid-column: 1; }.remove-break { grid-column: 2; grid-row: 1; justify-self: end; }.modal-footer { flex-direction: column-reverse; }.modal-footer .button { width: 100%; }.quick-clock-row { align-items: flex-start; flex-direction: column; }.quick-clock-button { width: 100%; }
 }
 @media (max-width: 410px) { .metric-grid { grid-template-columns: 1fr; }.featured-card, .active-card { grid-column: auto; }.week-summary-strip { grid-template-columns: 1fr 1fr; }.calendar-cell { min-height: 72px; }.calendar-event { margin-top: 2px; }.calendar-event-dot { display: none; } }
