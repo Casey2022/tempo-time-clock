@@ -1229,4 +1229,4 @@ window.TempoApp = {
 
 window.TempoAuth?.start({ onAuthenticated: (session) => window.TempoCloud?.hydrate?.(session) });
 
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=14').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=15').catch(() => {}));

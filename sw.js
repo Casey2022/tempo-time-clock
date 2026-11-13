@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tempo-shell-v14';
+const CACHE_NAME = 'tempo-shell-v15';
 const APP_SHELL = [
   './',
   './index.html',
@@ -11,6 +11,10 @@ const APP_SHELL = [
   './photos.js',
   './app.js',
   './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/maskable-512.png',
+  './icons/apple-touch-icon.png',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.105.0',
 ];
 
